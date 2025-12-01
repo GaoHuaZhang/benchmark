@@ -723,7 +723,7 @@ def format_dict_as_table(
     value_align: str = ">",
 ) -> str:
     """Format a dictionary as a structured table with borders.
-    
+
     Args:
         data_dict: Dictionary to format (key -> value mapping)
         title: Optional title to display above the table
@@ -731,10 +731,10 @@ def format_dict_as_table(
         value_column_name: Name for the value column header
         key_align: Alignment for key column ('<' for left, '>' for right, '^' for center)
         value_align: Alignment for value column ('<' for left, '>' for right, '^' for center)
-    
+
     Returns:
         str: Formatted table as a multi-line string
-    
+
     Example:
         >>> data = {"Connection timeout": 5, "Invalid response": 3}
         >>> print(format_dict_as_table(data, title="Failed Reasons:"))
@@ -748,34 +748,34 @@ def format_dict_as_table(
     """
     if not data_dict:
         return title if title else ""
-    
+
     # Calculate column widths
     max_key_len = max(len(str(key)) for key in data_dict.keys())
     max_key_len = max(max_key_len, len(key_column_name))
     max_value_len = max(len(str(value)) for value in data_dict.values())
     max_value_len = max(max_value_len, len(value_column_name))
-    
+
     # Build table
     table_lines = []
     if title:
         table_lines.append(title)
-    
+
     # Table header separator
     header_separator = "+" + "-" * (max_key_len + 2) + "+" + "-" * (max_value_len + 2) + "+"
     table_lines.append(header_separator)
-    
+
     # Table header
     key_header = f"{key_column_name:{key_align}{max_key_len}}"
     value_header = f"{value_column_name:{value_align}{max_value_len}}"
     table_lines.append(f"| {key_header} | {value_header} |")
     table_lines.append(header_separator)
-    
+
     # Table rows
     for key, value in data_dict.items():
         key_str = f"{str(key):{key_align}{max_key_len}}"
         value_str = f"{str(value):{value_align}{max_value_len}}"
         table_lines.append(f"| {key_str} | {value_str} |")
-    
+
     table_lines.append(header_separator)
-    
+
     return "\n".join(table_lines)

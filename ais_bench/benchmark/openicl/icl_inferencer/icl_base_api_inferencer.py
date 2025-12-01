@@ -371,7 +371,7 @@ class BaseApiInferencer(BaseInferencer):
                         ICLI_CODES.CONCURRENCY_NOT_SET_IN_PRESSEURE_MODE,
                         f"Concurrency not set in pressure mode, please set `batch_size` in model config",
                     )
-            async with semaphore:      
+            async with semaphore:
                 # Pressure mode: continuously send requests until pressure_time
                 if self.pressure_mode:
                     # Prefetch next data immediately after first request
@@ -421,9 +421,19 @@ class BaseApiInferencer(BaseInferencer):
                 # Call user-provided async request
                 tasks.append(asyncio.create_task(limited_request_func(data)))
                 # Pressure mode: exit when stable state is reached
-                if self.pressure_mode and len(tasks) >= num_workers:
-                    self.logger.debug(f"Pressure mode, exit when stable state is reached")
-                    break
+                if self.pressure_mode:
+                    if  len(tasks) >= num_workers: # stable state is reached
+                        self.logger.info(f"Pressure mode, process {os.getpid()} stop add concurrency due to stable state is reached")
+                        break
+                    if time.perf_counter() - start_time >= self.pressure_time: # pressure timeout is reached
+                        self.logger.warning(
+                            f"Pressure mode: process {os.getpid()} exited before entering a stable state "
+                            "because the pressure timeout was hit. Consider increase the `request_rate` "
+                            "in the model config, or increasing "
+                            "`WORKERS_NUM` in global_consts.py to enhance concurrency."
+                        )
+                        stop_event.set()
+                        break
             await asyncio.gather(*tasks)
         except asyncio.exceptions.CancelledError:
             self.logger.debug(f"Keyboard interrupt, set stop event")
