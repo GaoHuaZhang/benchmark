@@ -84,25 +84,19 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
         result = summarizer._get_dataset_abbr([self.dataset_cfg, dataset_cfg2])
         self.assertEqual(result, "testdataset")
 
-    @patch('ais_bench.benchmark.summarizers.default_perf.build_model_from_cfg')
     @patch('ais_bench.benchmark.summarizers.default_perf.init_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_all_numpy_from_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.is_mm_prompt')
     @patch('ais_bench.benchmark.summarizers.default_perf.AISTokenizer')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_tokenizer')
     def test_calc_perf_data_success(self, mock_load_tokenizer, mock_aistokenizer, mock_is_mm_prompt, mock_load_all_numpy_from_db,
-                                 mock_init_db, mock_build_model_from_cfg):
+                                 mock_init_db):
         """测试成功计算性能数据的情况"""
-        # 设置mock
-        mock_model = MagicMock()
-        mock_model.encode.side_effect = lambda x: list(range(len(x)))
-        mock_build_model_from_cfg.return_value = mock_model
-        
         # Mock AISTokenizer
         mock_tokenizer = MagicMock()
         mock_tokenizer.encode.side_effect = lambda x: list(range(len(x)))
         mock_aistokenizer.return_value = mock_tokenizer
-        
+
         # Mock load_tokenizer
         mock_load_tokenizer.return_value = mock_tokenizer
         mock_conn = MagicMock()
@@ -133,10 +127,9 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
         self.assertEqual(result["ttft"], 1)
         mock_conn.close.assert_called_once()
 
-    @patch('ais_bench.benchmark.summarizers.default_perf.build_model_from_cfg')
     @patch('ais_bench.benchmark.summarizers.default_perf.AISTokenizer')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_tokenizer')
-    def test_calc_perf_data_failure(self, mock_load_tokenizer, mock_aistokenizer, mock_build_model_from_cfg):
+    def test_calc_perf_data_failure(self, mock_load_tokenizer, mock_aistokenizer):
         """测试计算性能数据失败的情况"""
         manager_list = []
         perf_data = {"success": False}
@@ -147,19 +140,16 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
         self.assertEqual(len(manager_list), 1)
         self.assertEqual(manager_list[0], {"success": False})
 
-    @patch('ais_bench.benchmark.summarizers.default_perf.build_model_from_cfg')
     @patch('ais_bench.benchmark.summarizers.default_perf.init_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_all_numpy_from_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.AISTokenizer')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_tokenizer')
-    def test_calc_perf_data_time_points_none(self, mock_load_tokenizer, mock_aistokenizer, mock_load_all_numpy_from_db, mock_init_db, mock_build_model_from_cfg):
+    def test_calc_perf_data_time_points_none(self, mock_load_tokenizer, mock_aistokenizer, mock_load_all_numpy_from_db, mock_init_db):
         """测试time_points为None的情况"""
         # 设置mock
-        mock_model = MagicMock()
-        mock_build_model_from_cfg.return_value = mock_model
         mock_conn = MagicMock()
         mock_init_db.return_value = mock_conn
-        
+
         # Mock AISTokenizer和load_tokenizer
         mock_load_tokenizer.return_value = MagicMock()
         mock_aistokenizer.return_value = MagicMock()
@@ -314,13 +304,20 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
         mock_output_to_screen.assert_called_once()
 
 
-    @patch('ais_bench.benchmark.summarizers.default_perf.dump_results_dict')
-    def test_dump_calculated_perf_data(self, mock_dump_results_dict):
+    @patch('ais_bench.benchmark.summarizers.default_perf.DefaultPerfSummarizer._merge_and_save_to_csv')
+    @patch('os.makedirs')
+    def test_dump_calculated_perf_data(self, mock_makedirs, mock_merge_and_save):
         """测试_dump_calculated_perf_data方法"""
         # 创建模拟计算器对象
         mock_calculator1 = MagicMock()
+        mock_calculator1.metrics = {
+            "E2EL": {"stage1": {"Average": 100.0, "N": 10}}
+        }
         mock_calculator1.get_common_res.return_value = {"metric": {"stage": 0.5}}
         mock_calculator2 = MagicMock()
+        mock_calculator2.metrics = {
+            "E2EL": {"stage1": {"Average": 200.0, "N": 20}}
+        }
         mock_calculator2.get_common_res.return_value = {"metric": {"stage": 0.6}}
 
         # 设置summarizers的calculators属性
@@ -340,10 +337,9 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
         # 验证调用
         mock_calculator1.calculate.assert_called_once()
         mock_calculator2.calculate.assert_called_once()
-        mock_calculator1.save_performance.assert_called_with("/tmp/test_work_dir/performances/model1/dataset1.csv")
-        mock_calculator2.save_performance.assert_called_with("/tmp/test_work_dir/performances/model2/dataset2.csv")
-        mock_dump_results_dict.assert_any_call({"metric": {"stage": 0.5}}, "/tmp/test_work_dir/performances/model1/dataset1.json")
-        mock_dump_results_dict.assert_any_call({"metric": {"stage": 0.6}}, "/tmp/test_work_dir/performances/model2/dataset2.json")
+        # 验证调用了合并保存方法
+        mock_merge_and_save.assert_any_call(mock_calculator1, "/tmp/test_work_dir/performances/model1/dataset1.csv")
+        mock_merge_and_save.assert_any_call(mock_calculator2, "/tmp/test_work_dir/performances/model2/dataset2.csv")
 
     def test_tqdm_monitor(self):
         """测试tqdm_monitor方法"""
@@ -377,21 +373,18 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
             mock_pbar.refresh.assert_called()
 
     @patch('ais_bench.benchmark.summarizers.default_perf.is_mm_prompt')
-    @patch('ais_bench.benchmark.summarizers.default_perf.build_model_from_cfg')
     @patch('ais_bench.benchmark.summarizers.default_perf.init_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_all_numpy_from_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.AISTokenizer')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_tokenizer')
     def test_calc_perf_data_multimodal(self, mock_load_tokenizer, mock_aistokenizer, mock_load_all_numpy_from_db, mock_init_db,
-                                     mock_build_model_from_cfg, mock_is_mm_prompt):
+                                     mock_is_mm_prompt):
         """测试计算多模态提示的性能数据"""
         # 设置mock
-        mock_model = MagicMock()
-        mock_build_model_from_cfg.return_value = mock_model
         mock_conn = MagicMock()
         mock_init_db.return_value = mock_conn
         mock_load_all_numpy_from_db.return_value = {}
-        
+
         # Mock AISTokenizer和load_tokenizer
         mock_load_tokenizer.return_value = MagicMock()
         mock_aistokenizer.return_value = MagicMock()
@@ -415,21 +408,16 @@ class TestDefaultPerfSummarizer(unittest.TestCase):
         result = manager_list[0]
         self.assertEqual(result["input_tokens"], 0)  # 多模态输入应该设置为0
 
-    @patch('ais_bench.benchmark.summarizers.default_perf.build_model_from_cfg')
     @patch('ais_bench.benchmark.summarizers.default_perf.init_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_all_numpy_from_db')
     @patch('ais_bench.benchmark.summarizers.default_perf.AISTokenizer')
     @patch('ais_bench.benchmark.summarizers.default_perf.load_tokenizer')
-    def test_calc_perf_data_recursive_update(self, mock_load_tokenizer, mock_aistokenizer, mock_load_all_numpy_from_db, mock_init_db,
-                                          mock_build_model_from_cfg):
+    def test_calc_perf_data_recursive_update(self, mock_load_tokenizer, mock_aistokenizer, mock_load_all_numpy_from_db, mock_init_db):
         """测试_calc_perf_data方法中的递归更新功能"""
         # 设置mock
-        mock_model = MagicMock()
-        mock_model.encode.return_value = [1, 2, 3]
-        mock_build_model_from_cfg.return_value = mock_model
         mock_conn = MagicMock()
         mock_init_db.return_value = mock_conn
-        
+
         # Mock AISTokenizer和load_tokenizer
         mock_tokenizer = MagicMock()
         mock_tokenizer.encode.return_value = [1, 2, 3]

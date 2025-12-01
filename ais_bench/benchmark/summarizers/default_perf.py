@@ -20,13 +20,12 @@ from ais_bench.benchmark.calculators.base_perf_metric_calculator import (
 )
 from ais_bench.benchmark.utils.logging.logger import AISLogger
 from ais_bench.benchmark.utils.core.abbr import model_abbr_from_cfg
-from ais_bench.benchmark.utils.config import build_perf_metric_calculator_from_cfg, build_model_from_cfg
+from ais_bench.benchmark.utils.config import build_perf_metric_calculator_from_cfg
 from ais_bench.benchmark.utils.prompt import is_mm_prompt
-from ais_bench.benchmark.utils.results import dump_results_dict
 from ais_bench.benchmark.utils.visualization import plot_sorted_request_timelines
 from ais_bench.benchmark.openicl.icl_inferencer.output_handler.db_utils import init_db, load_all_numpy_from_db
 
-from ais_bench.benchmark.utils.logging.exceptions import AISBenchDataContentError, FileMatchError
+from ais_bench.benchmark.utils.logging.exceptions import AISBenchDataContentError, FileMatchError, AISBenchIOError
 from ais_bench.benchmark.utils.logging.error_codes import SUMM_CODES
 from ais_bench.benchmark.utils.file.load_tokenizer import load_tokenizer, AISTokenizer
 from ais_bench.benchmark.utils.visualization.rps_distribution_plot import add_actual_rps_to_chart
@@ -304,20 +303,71 @@ class DefaultPerfSummarizer:
             )
         return details_perf_datas
 
+    def _merge_and_save_to_csv(self, calc, output_path: str):
+        """Merge common metrics and performance metrics into a single CSV file.
+
+        Args:
+            calc: Calculator instance with calculated metrics
+            output_path: Path to save the merged CSV file
+        """
+        metrics = calc.metrics
+        common_metrics = calc.get_common_res()
+
+        try:
+            first_entry = next(iter(metrics.values()), None)
+
+            stage_names = list(first_entry.keys())
+
+            first_stage_data = first_entry[stage_names[0]]
+
+            headers = list(first_stage_data.keys())
+
+            with open(output_path, mode="w", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                # Write header for performance parameters
+                writer.writerow(["Performance Parameters"] + ["Stage"] + headers)
+
+                # Write performance parameters data
+                for obj_name, values in metrics.items():
+                    for stage_name in stage_names:
+                        row = (
+                            [obj_name]
+                            + [stage_name]
+                            + [values[stage_name].get(key, "") for key in headers]
+                        )
+                        writer.writerow(row)
+
+                # Add a blank row to separate sections
+                writer.writerow([])
+
+                # Write header for common metrics
+                writer.writerow(["Common Metric", "Stage", "Value"])
+
+                # Write common metrics data
+                for metric_name, stage_value in common_metrics.items():
+                    for stage_name, value in stage_value.items():
+                        writer.writerow([metric_name, stage_name, value])
+
+        except (OSError, IOError) as e:
+            raise AISBenchIOError(
+                SUMM_CODES.UNKNOWN_ERROR,
+                f"Failed to write merged performance data to csv file '{output_path}': {e}"
+            )
+
     def _dump_calculated_perf_data(self):
         """Dump calculated performance data to files.
 
-        Saves both JSON and CSV formats for each model and dataset combination.
+        Saves merged CSV format (combining both performance parameters and common metrics)
+        for each model and dataset combination.
         """
         for model, calc_per_ds in self.calculators.items():
             for dataset, calc in calc_per_ds.items():
                 calc.calculate()
                 output_filepath = osp.join(self.work_dir, "performances", model)
-                dump_results_dict(
-                    calc.get_common_res(),
-                    osp.join(output_filepath, dataset + ".json"),
+                # Save merged data to a single CSV file
+                self._merge_and_save_to_csv(
+                    calc, osp.join(output_filepath, dataset + ".csv")
                 )
-                calc.save_performance(osp.join(output_filepath, dataset + ".csv"))
 
     def _pick_up_results(self):
         """Pick up performance results from files.
@@ -332,21 +382,32 @@ class DefaultPerfSummarizer:
                 dataset_abbr = self._get_dataset_abbr(dataset_group)
                 perf_result_dir = osp.join(self.work_dir, "performances", model)
                 table_list = []
-                if osp.exists(osp.join(perf_result_dir, f"{dataset_abbr}.csv")):
+                csv_path = osp.join(perf_result_dir, f"{dataset_abbr}.csv")
+                json_path = osp.join(perf_result_dir, f"{dataset_abbr}.json")
+
+                # Try to load from merged CSV first
+                if osp.exists(csv_path):
+                    # Load performance parameters section
                     table_list.append(
-                        self._load_csv_to_table(
-                            osp.join(perf_result_dir, f"{dataset_abbr}.csv")
-                        )
+                        self._load_csv_to_table(csv_path)
                     )
-                if osp.exists(osp.join(perf_result_dir, f"{dataset_abbr}.json")):
-                    table_list.append(
-                        self._load_json_to_table(
-                            osp.join(perf_result_dir, f"{dataset_abbr}.json")
+                    # Try to load common metrics from merged CSV
+                    common_metrics_table = self._load_common_metrics_from_csv(csv_path)
+                    if common_metrics_table:
+                        table_list.append(common_metrics_table)
+                    # If no common metrics in CSV, try JSON (for backward compatibility)
+                    elif osp.exists(json_path):
+                        table_list.append(
+                            self._load_json_to_table(json_path)
                         )
+                # Fallback to JSON if CSV doesn't exist (for backward compatibility)
+                elif osp.exists(json_path):
+                    table_list.append(
+                        self._load_json_to_table(json_path)
                     )
                 else:
                     self.logger.warning(
-                        f"Cannot find {dataset_abbr} common performance results in {perf_result_dir}, skip."
+                        f"Cannot find {dataset_abbr} performance results in {perf_result_dir}, skip."
                     )
                 perf_tables[f"{model}/{dataset_abbr}"] = table_list
 
@@ -354,6 +415,9 @@ class DefaultPerfSummarizer:
 
     def _load_csv_to_table(self, csv_path):
         """Load CSV file and convert to table format.
+
+        For merged CSV files, only loads the performance parameters section
+        (stops at the first empty row).
 
         Args:
             csv_path: Path to CSV file
@@ -365,6 +429,9 @@ class DefaultPerfSummarizer:
         with open(csv_path, "r", newline="", encoding="utf-8") as file:
             csv_reader = csv.reader(file)
             for row in csv_reader:
+                # Stop at first empty row (separator between sections)
+                if not row or all(not cell.strip() for cell in row):
+                    break
                 table.append(row)
         return table
 
@@ -383,6 +450,30 @@ class DefaultPerfSummarizer:
         for key, stage_value in data.items():
             for stage_name, value in stage_value.items():
                 table.append([key, stage_name, value])
+        return table
+
+    def _load_common_metrics_from_csv(self, csv_path):
+        """Load common metrics section from merged CSV file.
+
+        Args:
+            csv_path: Path to merged CSV file
+
+        Returns:
+            List[List]: Table data for common metrics section
+        """
+        table = []
+        found_separator = False
+        with open(csv_path, "r", newline="", encoding="utf-8") as file:
+            csv_reader = csv.reader(file)
+            for row in csv_reader:
+                # Skip until we find the empty row separator
+                if not found_separator:
+                    if not row or all(not cell.strip() for cell in row):
+                        found_separator = True
+                    continue
+                # After separator, collect common metrics rows
+                if row:
+                    table.append(row)
         return table
 
     def _output_to_screen(self, tables_dict: Dict):
@@ -458,10 +549,6 @@ class DefaultPerfSummarizer:
                     output_file=plot_file_path,
                     unit="s",
                 )
-                if has_plot:
-                    self.logger.info(
-                        f"The {dataset_abbr}_plot has been saved in {plot_file_path}"
-                    )
                 calculator: BasePerfMetricCalculator = (
                     build_perf_metric_calculator_from_cfg(self.calculator_conf)
                 )
