@@ -11,6 +11,7 @@ import copy
 import contextlib
 from abc import abstractmethod
 from collections import defaultdict
+import multiprocessing as mp
 from multiprocessing import BoundedSemaphore, Queue, shared_memory, Value
 from typing import Any, Dict, Optional, Tuple
 
@@ -58,6 +59,18 @@ class BaseApiInferencer(BaseInferencer):
         self.pressure_time = pressure_time
         # status_counter: If perf mode requires additional threads/counters, consider lazy creation to reduce overhead in normal mode.
         self.status_counter = StatusCounter()
+        self.global_index = mp.RawValue('i', 0)
+        self.global_lock = mp.Lock()
+        # Cache for batch-prefetched data
+        self._data_cache = []  # Thread-local cache for batch data
+
+    def set_global_index(self, global_index: mp.RawValue):
+        self.global_index = global_index
+        print(f"{self.global_index=}")
+
+    def set_global_lock(self, global_lock: mp.Lock):
+        self.global_lock = global_lock
+        print(f"{self.global_lock=}")
 
     def _monitor_status_thread(
         self,
@@ -213,6 +226,9 @@ class BaseApiInferencer(BaseInferencer):
     ) -> Optional[Any]:
         """Attempt to consume one token (if configured) and one index entry.
 
+        Uses batch prefetching with process lock to improve concurrency.
+        Returns a single data item (not a generator) for compatibility.
+
         All blocking operations are dispatched to a thread via asyncio.to_thread so the
         event loop is never blocked.
         Returns the deserialized data or None if there's no data / should stop.
@@ -221,25 +237,50 @@ class BaseApiInferencer(BaseInferencer):
             share_memory: Shared memory containing data
             indexes: Indexes for data
             message_share_memory: Shared memory for message
+            stop_event: Event to signal termination
 
         Returns:
             Deserialized data or None if no data available
         """
-        data_index = -1
-        while data_index == -1 and not stop_event.is_set():
-            flag = struct.unpack_from("I", message_share_memory.buf[MESSAGE_INFO.DATA_SYNC_FLAG[0]:MESSAGE_INFO.DATA_SYNC_FLAG[1]], 0)[0]
-            if flag != 1:
+        # Check cache first (thread-safe)
+        if self._data_cache:
+            return self._data_cache.pop(0)
+
+        # Calculate batch fetch size (10% of batch_size, minimum 1)
+        data_fetch_size = max(1, int(self.batch_size * 0.1)) if self.batch_size else 1
+
+        # Atomically get batch of indices
+        data_indices = []
+        with self.global_lock:
+            data_index_start = self.global_index.value
+            # Check bounds
+            if data_index_start >= len(indexes):
+                return None
+            # Calculate end index
+            data_index_end = data_index_start + data_fetch_size
+            # Get indices
+            data_indices = [i % len(indexes) for i in range(data_index_start, data_index_end)]
+            # Update global index
+            self.global_index.value = data_index_end % len(indexes)
+
+        # Prefetch all data in the batch
+        batch_data = []
+        for data_index in data_indices:
+            if data_index >= len(indexes):
+                batch_data.append(None)
                 continue
-            data_index = struct.unpack_from("i", message_share_memory.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]], 0)[0]
-        message_share_memory.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]] = struct.pack("i", -1)
-        if data_index <0 or data_index >= len(indexes):
-            self.logger.debug(f"Data index out of range: {data_index}, return None")
-            return None
-        index_data = indexes[data_index]
-        if not index_data:
-            self.logger.debug(f"Index data is None, return None")
-            return None
-        return self._read_and_unpickle(share_memory.buf, index_data)
+            index_data = indexes[data_index]
+            if index_data is None:
+                batch_data.append(None)
+                continue
+            data = self._read_and_unpickle(share_memory.buf, index_data)
+            batch_data.append(data)
+
+
+        self._data_cache.extend(batch_data[1:])
+
+        # Return first item
+        return batch_data[0] if batch_data else None
 
     def _fill_janus_queue(
         self,

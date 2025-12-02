@@ -45,6 +45,8 @@ def run_single_inferencer(
     max_concurrency: int,
     indexes: Dict,
     token_bucket: BoundedSemaphore,
+    global_index: mp.RawValue = None,
+    global_lock: mp.Lock = None,
 ):
     """Run a single inferencer that reads samples from shared memory.
 
@@ -55,10 +57,14 @@ def run_single_inferencer(
         max_concurrency: Maximum concurrent requests in this process
         index_queue: Queue yielding (index, offset, length) for items in shared memory
         token_bucket: Token bucket for rate limiting
+        global_index: Global index for data
+        global_lock: Global lock for data
     """
     inferencer_cfg["model_cfg"] = model_cfg
     inferencer_cfg["batch_size"] = max_concurrency
     inferencer = ICL_INFERENCERS.build(inferencer_cfg)
+    inferencer.set_global_index(global_index)
+    inferencer.set_global_lock(global_lock)
     # pressure mode each process has a copy of the data list
 
     inferencer.inference_with_shm(
@@ -265,6 +271,8 @@ class OpenICLApiInferTask(BaseTask):
             indexes: Indexes for data
             data_index_value: Value for data index
             token_bucket: Token bucket for rate limiting
+            global_index: Global index for data
+            global_lock: Global lock for data
         """
         if self.concurrency > CONCURRENCY_PER_PROCESS:
             self.logger.warning(
@@ -273,12 +281,7 @@ class OpenICLApiInferTask(BaseTask):
             )
         else:
             self.logger.info(f"Debug mode, run with concurrency: {self.concurrency}")
-        self.inferencer.inference_with_shm(
-            dataset_shm.name,
-            message_shm.name,
-            indexes,
-            token_bucket,
-        )
+        self.inferencer.inference_with_shm(dataset_shm.name, message_shm.name, indexes, token_bucket)
 
     def _run_multi_process(
         self,
@@ -299,6 +302,8 @@ class OpenICLApiInferTask(BaseTask):
         Returns:
             List[Process]: List of started worker processes
         """
+        global_index = mp.RawValue("i", 0)
+        global_lock = mp.Lock()
         per_worker_concurrency = self._deliver_concurrency_for_workers()
         if not per_worker_concurrency:
             return []
@@ -324,6 +329,8 @@ class OpenICLApiInferTask(BaseTask):
                         concurrency,
                         indexes,
                         token_bucket,
+                        global_index,
+                        global_lock,
                     ),
                 )
 
@@ -450,18 +457,18 @@ class OpenICLApiInferTask(BaseTask):
                 )
                 token_thread.start()
 
-                global_data_index_process = Process(
-                    target=update_global_data_index,
-                    args=(
-                        list(shm.name for shm in message_shms.values()),
-                        len(indexes),
-                        global_indexes,
-                        self.pressure,
-                    ),
-                    daemon=True,
-                )
+                # global_data_index_process = Process(
+                #     target=update_global_data_index,
+                #     args=(
+                #         list(shm.name for shm in message_shms.values()),
+                #         len(indexes),
+                #         global_indexes,
+                #         self.pressure,
+                #     ),
+                #     daemon=True,
+                # )
 
-                global_data_index_process.start()
+                # global_data_index_process.start()
 
                 self._run_debug(
                     dataset_shm,
@@ -479,17 +486,17 @@ class OpenICLApiInferTask(BaseTask):
                     message_shms,
                 )
 
-                global_data_index_process = Process(
-                    target=update_global_data_index,
-                    args=(
-                        list(shm.name for shm in message_shms.values()),
-                        len(indexes),
-                        global_indexes,
-                        self.pressure,
-                    ),
-                    daemon=True,
-                )
-                global_data_index_process.start()
+                # global_data_index_process = Process(
+                #     target=update_global_data_index,
+                #     args=(
+                #         list(shm.name for shm in message_shms.values()),
+                #         len(indexes),
+                #         global_indexes,
+                #         self.pressure,
+                #     ),
+                #     daemon=True,
+                # )
+                # global_data_index_process.start()
                 # Start ProgressBar after getting process IDs in multi-process mode
                 # Create progress bar
                 pb = ProgressBar(
@@ -523,7 +530,7 @@ class OpenICLApiInferTask(BaseTask):
             # Wait for all subprocesses to finish, timeout 1 minute and force terminate
             self.logger.warning(f"Keyboard interrupt!!! Task [{task_abbr_from_cfg(self.cfg)}] will be terminated")
             self.stop_evt.set()
-            global_data_index_process.join(timeout=TASK_WAIT_TIME)
+            # global_data_index_process.join(timeout=TASK_WAIT_TIME)
             pb_thread.join()
             pb.set_message_flag(1)
             if processes:
@@ -539,7 +546,7 @@ class OpenICLApiInferTask(BaseTask):
                         p.join(timeout=TASK_WAIT_TIME)
         finally:
             self.stop_evt.set()
-            global_data_index_process.join(timeout=TASK_WAIT_TIME)
+            # global_data_index_process.join(timeout=TASK_WAIT_TIME)
             pb_thread.join()
             pb.set_message_flag(1)
             token_thread.join()
