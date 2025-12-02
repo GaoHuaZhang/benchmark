@@ -131,21 +131,32 @@ class StablePerfMetricCalculator(BasePerfMetricCalculator):
                 < int(self.max_concurrency * (1 - WAVE_OFFSET))
             ):
                 # Check if there's a start event within INTERVAL_OFFSET that recovers concurrency
+                # Skip consecutive end events and look ahead for start events
                 should_exit_stable = True
-                if i + 1 < len(sorted_time_sections):
-                    next_section = sorted_time_sections[i + 1]
-                    time_interval = next_section["time"] - section["time"]
-                    if (
-                        time_interval <= INTERVAL_OFFSET
-                        and next_section["attr"] == "start"
-                    ):
-                        # Calculate what the concurrency would be after the next start
-                        next_concurrency = time_point_concurrency[i] + 1
-                        if next_concurrency >= int(
+                current_time = section["time"]
+                current_concurrency = time_point_concurrency[i]
+
+                # Look ahead to find the next start event within INTERVAL_OFFSET
+                for j in range(i + 1, len(sorted_time_sections)):
+                    next_section = sorted_time_sections[j]
+                    time_interval = next_section["time"] - current_time
+
+                    # If time interval exceeds INTERVAL_OFFSET, exit stable stage
+                    if time_interval > INTERVAL_OFFSET:
+                        break
+
+                    # Update concurrency based on the event type
+                    if next_section["attr"] == "end":
+                        current_concurrency -= 1
+                    else:  # start event
+                        current_concurrency += 1
+                        # If concurrency recovers to threshold, don't exit stable stage
+                        if current_concurrency >= int(
                             self.max_concurrency * (1 - WAVE_OFFSET)
                         ):
-                            # The next start will recover concurrency, don't exit stable stage
                             should_exit_stable = False
+                            break
+
                 if should_exit_stable:
                     self.stage_section[1] = section["time"]
                     progress_bar.update(len(sorted_time_sections) - progress_bar.n)

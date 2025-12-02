@@ -420,9 +420,9 @@ class BaseApiInferencer(BaseInferencer):
                     break
                 # Call user-provided async request
                 tasks.append(asyncio.create_task(limited_request_func(data)))
-                # Pressure mode: exit when stable state is reached
+                # Pressure mode: exit when max concurrency is reached
                 if self.pressure_mode:
-                    if  len(tasks) >= num_workers: # stable state is reached
+                    if  len(tasks) >= num_workers: # max concurrency is reached
                         self.logger.info(f"Pressure mode, process {os.getpid()} stop add concurrency due to max concurrency is reached")
                         break
                     if time.perf_counter() - start_time >= self.pressure_time: # pressure timeout is reached
