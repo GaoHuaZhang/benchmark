@@ -17,7 +17,6 @@ from ais_bench.benchmark.global_consts import WORKERS_NUM
 from ais_bench.benchmark.registry import ICL_INFERENCERS, TASKS, ICL_RETRIEVERS
 from ais_bench.benchmark.tasks.base import BaseTask, TaskStateManager
 from ais_bench.benchmark.tasks.utils import (
-    update_global_data_index,
     check_virtual_memory_usage,
     create_message_share_memory,
     ProgressBar,
@@ -457,19 +456,6 @@ class OpenICLApiInferTask(BaseTask):
                 )
                 token_thread.start()
 
-                # global_data_index_process = Process(
-                #     target=update_global_data_index,
-                #     args=(
-                #         list(shm.name for shm in message_shms.values()),
-                #         len(indexes),
-                #         global_indexes,
-                #         self.pressure,
-                #     ),
-                #     daemon=True,
-                # )
-
-                # global_data_index_process.start()
-
                 self._run_debug(
                     dataset_shm,
                     message_shm,
@@ -486,17 +472,6 @@ class OpenICLApiInferTask(BaseTask):
                     message_shms,
                 )
 
-                # global_data_index_process = Process(
-                #     target=update_global_data_index,
-                #     args=(
-                #         list(shm.name for shm in message_shms.values()),
-                #         len(indexes),
-                #         global_indexes,
-                #         self.pressure,
-                #     ),
-                #     daemon=True,
-                # )
-                # global_data_index_process.start()
                 # Start ProgressBar after getting process IDs in multi-process mode
                 # Create progress bar
                 pb = ProgressBar(
@@ -530,7 +505,6 @@ class OpenICLApiInferTask(BaseTask):
             # Wait for all subprocesses to finish, timeout 1 minute and force terminate
             self.logger.warning(f"Keyboard interrupt!!! Task [{task_abbr_from_cfg(self.cfg)}] will be terminated")
             self.stop_evt.set()
-            # global_data_index_process.join(timeout=TASK_WAIT_TIME)
             pb_thread.join()
             pb.set_message_flag(1)
             if processes:
@@ -546,7 +520,6 @@ class OpenICLApiInferTask(BaseTask):
                         p.join(timeout=TASK_WAIT_TIME)
         finally:
             self.stop_evt.set()
-            # global_data_index_process.join(timeout=TASK_WAIT_TIME)
             pb_thread.join()
             pb.set_message_flag(1)
             token_thread.join()

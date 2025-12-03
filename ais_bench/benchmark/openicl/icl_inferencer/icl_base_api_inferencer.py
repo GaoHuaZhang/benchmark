@@ -221,8 +221,6 @@ class BaseApiInferencer(BaseInferencer):
         self,
         share_memory: shared_memory.SharedMemory,
         indexes: Dict,
-        message_share_memory: shared_memory.SharedMemory,
-        stop_event: threading.Event,
     ) -> Optional[Any]:
         """Attempt to consume one token (if configured) and one index entry.
 
@@ -255,6 +253,7 @@ class BaseApiInferencer(BaseInferencer):
             data_index_start = self.global_index.value
             # Check bounds
             if data_index_start >= len(indexes):
+                self.logger.warning("Get unexpected data index, return None")
                 return None
             # Calculate end index
             data_index_end = data_index_start + data_fetch_size
@@ -276,7 +275,6 @@ class BaseApiInferencer(BaseInferencer):
             data = self._read_and_unpickle(share_memory.buf, index_data)
             batch_data.append(data)
 
-
         self._data_cache.extend(batch_data[1:])
 
         # Return first item
@@ -285,7 +283,6 @@ class BaseApiInferencer(BaseInferencer):
     def _fill_janus_queue(
         self,
         dataset_share_memory: shared_memory.SharedMemory,
-        message_share_memory: shared_memory.SharedMemory,
         indexes: Dict,
         janus_queue: janus.Queue,
         stop_event: threading.Event,
@@ -303,9 +300,7 @@ class BaseApiInferencer(BaseInferencer):
         for _ in range(self.batch_size):
             if stop_event.is_set():
                 break
-            data = self._get_single_data(
-                dataset_share_memory, indexes, message_share_memory, stop_event
-            )
+            data = self._get_single_data(dataset_share_memory, indexes)
             # Block if queue is full -> natural backpressure
             janus_queue.sync_q.put(data)
             if data is None:
@@ -315,7 +310,6 @@ class BaseApiInferencer(BaseInferencer):
     def _producer_thread_target(
         self,
         dataset_share_memory: shared_memory.SharedMemory,
-        message_share_memory: shared_memory.SharedMemory,
         indexes: Dict,
         janus_queue: janus.Queue,
         stop_event: threading.Event,
@@ -331,9 +325,7 @@ class BaseApiInferencer(BaseInferencer):
         """
         # Continuous fill until stop_event or sentinel
         while not stop_event.is_set():
-            data = self._get_single_data(
-                dataset_share_memory, indexes, message_share_memory, stop_event
-            )
+            data = self._get_single_data(dataset_share_memory, indexes)
             while True:
                 try:
                     janus_queue.sync_q.put(data, timeout=1)
@@ -532,7 +524,6 @@ class BaseApiInferencer(BaseInferencer):
 
         self._fill_janus_queue(
             dataset_share_memory,
-            message_share_memory,
             indexes,
             janus_queue,
             stop_event,
@@ -543,7 +534,6 @@ class BaseApiInferencer(BaseInferencer):
             target=self._producer_thread_target,
             args=(
                 dataset_share_memory,
-                message_share_memory,
                 indexes,
                 janus_queue,
                 stop_event,
@@ -587,7 +577,6 @@ class BaseApiInferencer(BaseInferencer):
             )
             stop_event.set()
             message_share_memory.buf[MESSAGE_INFO.STATUS[0]:MESSAGE_INFO.STATUS[1]] = struct.pack("I", 1)
-            message_share_memory.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]] = struct.pack("i", -1)
             worker_task.cancel()
             try:
                 loop.run_until_complete(asyncio.wait_for(worker_task, timeout=10))
@@ -599,7 +588,6 @@ class BaseApiInferencer(BaseInferencer):
             stop_event.set()
             producer_thread.join()
             message_share_memory.buf[MESSAGE_INFO.STATUS[0]:MESSAGE_INFO.STATUS[1]] = struct.pack("I", 1)
-            message_share_memory.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]] = struct.pack("i", -1)
             self.logger.debug(f"Stop event set")
              # Join threads
             report_thread.join()

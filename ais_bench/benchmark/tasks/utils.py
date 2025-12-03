@@ -36,57 +36,6 @@ MIN_RELIABLE_INTERVAL = 0.001  # minimum reliable time interval (1 millisecond)
 logger = AISLogger()
 
 
-def update_global_data_index(
-    shm_names: List[str],
-    data_num: int,
-    global_data_indexes: list,
-    pressure: bool = False,
-):
-    """Update data index for shared memory."""
-    shms = [shared_memory.SharedMemory(name=shm_name) for shm_name in shm_names]
-    statuses = [0] * len(shms)
-    cur_pos = 0
-
-    def set_data_index(shm: shared_memory.SharedMemory, data_index: int):
-        shm.buf[MESSAGE_INFO.DATA_SYNC_FLAG[0]:MESSAGE_INFO.DATA_SYNC_FLAG[1]] = struct.pack("I", 0)  # set status to 0 before update data_index
-        shm.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]] = struct.pack("i", data_index)
-        shm.buf[MESSAGE_INFO.DATA_SYNC_FLAG[0]:MESSAGE_INFO.DATA_SYNC_FLAG[1]] = struct.pack("I", 1)  # set status to 1 after update data_index, ensure data consist
-    try:
-        while True:
-            for i, shm in enumerate(shms):
-                if statuses[i]: # subprocess already finished
-                    continue
-                status = struct.unpack_from("I", shm.buf[MESSAGE_INFO.STATUS[0]:MESSAGE_INFO.STATUS[1]])[0]
-                data_index = struct.unpack_from("i", shm.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]])[0]
-                while data_index != INDEX_READ_FLAG:
-                    if status == 1: # subprocess exit
-                        break
-                    time.sleep(0.01)
-                    status = struct.unpack_from("I", shm.buf[MESSAGE_INFO.STATUS[0]:MESSAGE_INFO.STATUS[1]])[0]
-                    data_index = struct.unpack_from("i", shm.buf[MESSAGE_INFO.DATA_INDEX[0]:MESSAGE_INFO.DATA_INDEX[1]])[0]
-                # Check status after exiting the while loop
-                if status == 1:
-                    statuses[i] = 1
-                    if sum(statuses) == len(shms):
-                        return
-                    continue
-                if cur_pos >= len(global_data_indexes) and not pressure:
-                    global_data_index = data_num - 1  # get None
-                    cur_pos = len(global_data_indexes) - 1
-                elif cur_pos >= len(global_data_indexes):
-                    cur_pos = 0
-                    global_data_index = global_data_indexes[cur_pos]
-                else:
-                    global_data_index = global_data_indexes[cur_pos]
-                cur_pos += 1
-                set_data_index(shm, global_data_index)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        for shm in shms:
-            shm.close()
-
-
 def create_message_share_memory():
     """Create shared memory for inter-process communication.
 
@@ -96,7 +45,7 @@ def create_message_share_memory():
     shm = shared_memory.SharedMemory(create=True, size=MESSAGE_SIZE)
     buf = shm.buf
     # Set flag to 2, indicating child process is ready for first batch data deserialization
-    buf[:] = struct.pack(FMT, 0, 0, 0, 0, 0, 0, 0, INDEX_READ_FLAG)
+    buf[:] = struct.pack(FMT, 0, 0, 0, 0, 0, 0)
     return shm
 
 
@@ -206,7 +155,7 @@ class ProgressBar:
         # Iterate over a snapshot of keys to allow external mapping mutations
         for pid, shm in self.per_pid_shms.items():
             raw = bytes(shm.buf[:MESSAGE_SIZE])
-            _, post, recv, fail, finish, case_finish, _, _ = struct.unpack(FMT, raw)
+            _, post, recv, fail, finish, case_finish = struct.unpack(FMT, raw)
             normalized = {
                 "post": max(0, int(post)),
                 "recv": max(0, int(recv)),
