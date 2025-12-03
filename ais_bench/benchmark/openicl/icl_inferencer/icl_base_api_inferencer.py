@@ -29,6 +29,7 @@ from ais_bench.benchmark.utils.logging.logger import AISLogger
 
 BLOCK_INTERVAL = 0.005  # Avoid request burst accumulation when RR is not configured
 DEFAULT_SAVE_EVERY_FACTOR = 0.1 # default save every factor is 0.1 of batch size
+DEFAULT_DATA_FETCH_SIZE_FACTOR = 0.1 # default data fetch size factor is 0.1 of batch size
 
 
 class BaseApiInferencer(BaseInferencer):
@@ -243,7 +244,7 @@ class BaseApiInferencer(BaseInferencer):
             return self._data_cache.pop(0)
 
         # Calculate batch fetch size (10% of batch_size, minimum 1)
-        data_fetch_size = max(1, int(self.batch_size * 0.1)) if self.batch_size else 1
+        data_fetch_size = max(1, int(self.batch_size * DEFAULT_DATA_FETCH_SIZE_FACTOR)) if self.batch_size else 1
 
         # Atomically get batch of indices
         data_indices = []
@@ -263,13 +264,10 @@ class BaseApiInferencer(BaseInferencer):
         # Prefetch all data in the batch
         batch_data = []
         for data_index in data_indices:
-            if data_index >= len(indexes):
-                batch_data.append(None)
-                continue
             index_data = indexes[data_index]
             if index_data is None:
                 batch_data.append(None)
-                continue
+                break
             data = self._read_and_unpickle(share_memory.buf, index_data)
             batch_data.append(data)
 
