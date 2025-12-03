@@ -66,11 +66,9 @@ class BaseApiInferencer(BaseInferencer):
 
     def set_global_index(self, global_index: mp.RawValue):
         self.global_index = global_index
-        print(f"{self.global_index=}")
 
     def set_global_lock(self, global_lock: mp.Lock):
         self.global_lock = global_lock
-        print(f"{self.global_lock=}")
 
     def _monitor_status_thread(
         self,

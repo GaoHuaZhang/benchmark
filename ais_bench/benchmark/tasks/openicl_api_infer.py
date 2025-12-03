@@ -197,7 +197,7 @@ class OpenICLApiInferTask(BaseTask):
 
         return data_list, finish_index_nums, global_indexes
 
-    def _dump_dataset_to_share_memory(self, data_list: List):
+    def _dump_dataset_to_share_memory(self, data_list: List, global_indexes: List):
         """Dump the serialized dataset into a shared memory block.
 
         Returns:
@@ -225,9 +225,10 @@ class OpenICLApiInferTask(BaseTask):
             indexes[index] = (index, offset, length)
             offset += length
             index += 1
+        padding_indexes = {i: indexes.get(k) for i, k in enumerate(global_indexes)}
         if not self.pressure:
-            indexes[index] = None
-        return len(pickled_dataset), dataset_shm, indexes
+            padding_indexes[len(global_indexes)] = None
+        return len(pickled_dataset), dataset_shm, padding_indexes
 
     def _deliver_concurrency_for_workers(self):
         """Split total concurrency across worker processes as evenly as possible.
@@ -410,7 +411,7 @@ class OpenICLApiInferTask(BaseTask):
             self.logger.warning(f"Get no data to infer, task finished")
             return
         self.warm_up(data_list, task_state_manager)
-        dataset_size, dataset_shm, indexes = self._dump_dataset_to_share_memory(data_list)
+        dataset_size, dataset_shm, indexes = self._dump_dataset_to_share_memory(data_list, global_indexes)
         # In pressure mode, treat the first `concurrency` requests as the dataset size
         if self.pressure:
             request_num = self.concurrency
