@@ -152,11 +152,11 @@ class DefaultPerfSummarizer:
                 manager_list.append({"success": False})
                 continue
             if not is_mm_prompt(perf_data["input"]):
-                perf_data["input_tokens"] = len(tokenizer.encode(perf_data["input"]))
+                perf_data["input_tokens"] = len(tokenizer.encode(perf_data["input"], add_special_tokens=False))
             else:
                 perf_data["input_tokens"] = 0  # multi-modal input does not support input_tokens
             if not perf_data["output_tokens"]:
-                perf_data["output_tokens"] = len(tokenizer.encode(perf_data["prediction"]))
+                perf_data["output_tokens"] = len(tokenizer.encode(perf_data["prediction"], add_special_tokens=False))
             perf_data.pop("input")
             perf_data.pop("prediction")
             perf_data.pop("db_name")

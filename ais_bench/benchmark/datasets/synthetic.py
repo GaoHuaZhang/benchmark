@@ -125,12 +125,125 @@ class SyntheticDataset(BaseDataset):
 
     @staticmethod
     def check_synthetic_tokenid_config(synthetic_config: Dict):
+        """Check tokenid config, supporting both RequestSize and Input/Output distribution configs."""
+        input_str = "Input"
+        output_str = "Output"
         request_size_key = "RequestSize"
-        _ensure_keys_present(synthetic_config.keys(), {request_size_key}, "SyntheticConfig")
+        prefix_len_key = "PrefixLen"
 
-        request_size_value = synthetic_config.get(request_size_key)
-        check_type(request_size_key, request_size_value, types=(int, ))
-        check_range(request_size_key, request_size_value, NumberRange(1, 2**20))
+        # Check if using distribution config (Input/Output) or fixed RequestSize
+        has_distribution = input_str in synthetic_config or output_str in synthetic_config
+        has_request_size = request_size_key in synthetic_config
+
+        if not has_distribution and not has_request_size:
+            raise ValueError(f"TokenIdConfig must have either {request_size_key} or {input_str}/{output_str} configuration.")
+
+        # Validate RequestSize if present
+        if has_request_size:
+            request_size_value = synthetic_config.get(request_size_key)
+            check_type(request_size_key, request_size_value, types=(int, ))
+            check_range(request_size_key, request_size_value, NumberRange(1, 2**20))
+
+        # Validate Input/Output distribution configs if present
+        if has_distribution:
+            if input_str in synthetic_config:
+                input_conf = synthetic_config.get(input_str)
+                _check_keys_equal(input_conf.keys(), {"Method", "Params"}, f'TokenIdConfig["{input_str}"]')
+                method = input_conf.get("Method")
+                params = input_conf.get("Params")
+                uniform_str = "uniform"
+                gaussian_str = "gaussian"
+                zipf_str = "zipf"
+                min_value_str = "MinValue"
+                max_value_str = "MaxValue"
+                mean_str = "Mean"
+                var_str = "Var"
+                alpha_str = "Alpha"
+
+                if method == uniform_str:
+                    _check_keys_equal(params.keys(), {min_value_str, max_value_str}, uniform_str)
+                elif method == gaussian_str:
+                    _check_keys_equal(params.keys(), {mean_str, var_str, min_value_str, max_value_str}, gaussian_str)
+                elif method == zipf_str:
+                    _check_keys_equal(params.keys(), {alpha_str, min_value_str, max_value_str}, zipf_str)
+                else:
+                    raise ValueError(f'Method should be one of {{{uniform_str, gaussian_str, zipf_str}}}, '
+                                     f'but got {method}.')
+
+                for param_name, param_value in params.items():
+                    desc_name = input_str + " " + param_name
+                    if param_name in (min_value_str, max_value_str):
+                        check_type(desc_name, param_value, types=(int,))
+                        check_range(desc_name, param_value, NumberRange(1, 2**20))
+                    elif param_name == mean_str:
+                        check_type(desc_name, param_value, types=(int, float))
+                        check_range(desc_name, param_value, NumberRange(-3.0e38, 3.0e38))
+                    elif param_name == var_str:
+                        check_type(desc_name, param_value, types=(int, float))
+                        check_range(desc_name, param_value, NumberRange(0, 3.0e38))
+                    elif param_name == alpha_str:
+                        check_type(desc_name, param_value, types=(int, float))
+                        check_range(desc_name, param_value, NumberRange(1.0, 10.0, lower_inclusive=False))
+
+                min_value = params.get(min_value_str)
+                max_value = params.get(max_value_str)
+                if min_value > max_value:
+                    raise ValueError(f'MinValue should less than MaxValue, '
+                                     f'but got MinValue is {min_value}, and MaxValue is {max_value}.')
+
+            if output_str in synthetic_config:
+                output_conf = synthetic_config.get(output_str)
+                _check_keys_equal(output_conf.keys(), {"Method", "Params"}, f'TokenIdConfig["{output_str}"]')
+                method = output_conf.get("Method")
+                params = output_conf.get("Params")
+                uniform_str = "uniform"
+                gaussian_str = "gaussian"
+                zipf_str = "zipf"
+                min_value_str = "MinValue"
+                max_value_str = "MaxValue"
+                mean_str = "Mean"
+                var_str = "Var"
+                alpha_str = "Alpha"
+
+                if method == uniform_str:
+                    _check_keys_equal(params.keys(), {min_value_str, max_value_str}, uniform_str)
+                elif method == gaussian_str:
+                    _check_keys_equal(params.keys(), {mean_str, var_str, min_value_str, max_value_str}, gaussian_str)
+                elif method == zipf_str:
+                    _check_keys_equal(params.keys(), {alpha_str, min_value_str, max_value_str}, zipf_str)
+                else:
+                    raise ValueError(f'Method should be one of {{{uniform_str, gaussian_str, zipf_str}}}, '
+                                     f'but got {method}.')
+
+                for param_name, param_value in params.items():
+                    desc_name = output_str + " " + param_name
+                    if param_name in (min_value_str, max_value_str):
+                        check_type(desc_name, param_value, types=(int,))
+                        check_range(desc_name, param_value, NumberRange(1, 2**20))
+                    elif param_name == mean_str:
+                        check_type(desc_name, param_value, types=(int, float))
+                        check_range(desc_name, param_value, NumberRange(-3.0e38, 3.0e38))
+                    elif param_name == var_str:
+                        check_type(desc_name, param_value, types=(int, float))
+                        check_range(desc_name, param_value, NumberRange(0, 3.0e38))
+                    elif param_name == alpha_str:
+                        check_type(desc_name, param_value, types=(int, float))
+                        check_range(desc_name, param_value, NumberRange(1.0, 10.0, lower_inclusive=False))
+
+                min_value = params.get(min_value_str)
+                max_value = params.get(max_value_str)
+                if min_value > max_value:
+                    raise ValueError(f'MinValue should less than MaxValue, '
+                                     f'but got MinValue is {min_value}, and MaxValue is {max_value}.')
+
+        # Validate PrefixLen if present (can be int or float)
+        if prefix_len_key in synthetic_config:
+            prefix_len_value = synthetic_config.get(prefix_len_key)
+            check_type(prefix_len_key, prefix_len_value, types=(int, float))
+            if isinstance(prefix_len_value, float):
+                check_range(prefix_len_key, prefix_len_value, NumberRange(0.0, 1.0))
+            else:
+                check_range(prefix_len_key, prefix_len_value, NumberRange(0, 2**20))
 
     @staticmethod
     def _check_synthetic_config(synthetic_config: Dict):
@@ -261,6 +374,133 @@ class SyntheticDataset(BaseDataset):
 
         return valid_indices[rand_indices].to(torch.int64)
 
+    def _adjust_prompt_length(self, tokenizer, prompt, target_token_length):
+        """Adjust prompt text to ensure it encodes to exactly target_token_length tokens.
+
+        Args:
+            tokenizer: The tokenizer to use
+            prompt: Initial prompt text
+            target_token_length: Desired number of tokens
+
+        Returns:
+            str: Adjusted prompt text that encodes to exactly target_token_length tokens
+        """
+        # Encode to check current token count
+        encoded = tokenizer.encode(prompt, add_special_tokens=False)
+        current_length = len(encoded)
+
+        if current_length == target_token_length:
+            return prompt
+
+        # If we need more tokens, append characters
+        if current_length < target_token_length:
+            # Find a character that adds tokens when appended
+            padding_chars = [" ", "A", "B", "C", "D", "E"]
+            padding_char = " "
+
+            for char in padding_chars:
+                test_text = prompt + char
+                test_encoded = tokenizer.encode(test_text, add_special_tokens=False)
+                if len(test_encoded) > current_length:
+                    padding_char = char
+                    break
+
+            # Add padding until we reach target length
+            max_iterations = target_token_length * 2  # Safety limit
+            iteration = 0
+            while current_length < target_token_length and iteration < max_iterations:
+                prompt += padding_char
+                encoded = tokenizer.encode(prompt, add_special_tokens=False)
+                new_length = len(encoded)
+
+                # If adding a character doesn't increase token count, try a different approach
+                if new_length == current_length:
+                    # Try adding a word instead
+                    prompt += " word"
+                    encoded = tokenizer.encode(prompt, add_special_tokens=False)
+                    new_length = len(encoded)
+
+                current_length = new_length
+                iteration += 1
+
+                # Check if we've reached the target exactly
+                if current_length == target_token_length:
+                    return prompt
+                elif current_length > target_token_length:
+                    # If we overshot, we'll handle it in the next section
+                    break
+
+        # If we have too many tokens, use binary search to find the right length
+        if current_length > target_token_length:
+            # Binary search for the right text length
+            left, right = 0, len(prompt)
+            best_prompt = prompt
+            best_length_diff = abs(current_length - target_token_length)
+
+            # Limit binary search iterations
+            max_binary_iterations = 50
+            binary_iteration = 0
+
+            while left < right and binary_iteration < max_binary_iterations:
+                mid = (left + right) // 2
+                if mid == 0:
+                    break
+
+                test_prompt = prompt[:mid]
+                test_encoded = tokenizer.encode(test_prompt, add_special_tokens=False)
+                test_length = len(test_encoded)
+
+                if test_length == target_token_length:
+                    return test_prompt
+                elif test_length < target_token_length:
+                    length_diff = target_token_length - test_length
+                    if length_diff < best_length_diff:
+                        best_prompt = test_prompt
+                        best_length_diff = length_diff
+                    left = mid + 1
+                else:
+                    right = mid
+
+                binary_iteration += 1
+
+            # Fine-tune from the best result
+            prompt = best_prompt
+            encoded = tokenizer.encode(prompt, add_special_tokens=False)
+            current_length = len(encoded)
+
+            # If we already have the exact length, return
+            if current_length == target_token_length:
+                return prompt
+
+            # Fine-tune by adding/removing characters one by one
+            max_fine_tune = 100  # Safety limit
+            fine_tune_iter = 0
+
+            while current_length != target_token_length and fine_tune_iter < max_fine_tune:
+                if current_length < target_token_length:
+                    # Try adding different characters
+                    for char in [" ", "A", "B", "C"]:
+                        test_prompt = prompt + char
+                        test_encoded = tokenizer.encode(test_prompt, add_special_tokens=False)
+                        if len(test_encoded) == target_token_length:
+                            return test_prompt
+                        elif len(test_encoded) > target_token_length:
+                            break
+                    # If no single char works, add a space and continue
+                    prompt += " "
+                else:
+                    # Remove one character from end
+                    if len(prompt) > 0:
+                        prompt = prompt[:-1]
+                    else:
+                        break
+
+                encoded = tokenizer.encode(prompt, add_special_tokens=False)
+                current_length = len(encoded)
+                fine_tune_iter += 1
+
+        return prompt
+
     def load(self, config, **kwargs):
         self.logger = AISLogger()
         dataset = []
@@ -286,9 +526,6 @@ class SyntheticDataset(BaseDataset):
 
         elif config_type == "tokenid":
             tokenid_config = config.get("TokenIdConfig")
-            request_size = tokenid_config.get("RequestSize", None)
-            prefix_len = tokenid_config.get("PrefixLen", 0)
-            request_size -= prefix_len
             model_path_value = config.get("ModelPath", None)
 
             check_type(model_path_key, model_path_value, types=(str, ))
@@ -299,7 +536,7 @@ class SyntheticDataset(BaseDataset):
             tokenizer_file_path = self.find_first_file_path(model_path_value, "tokenizer_config.json")
 
             tokenizer_model = AutoTokenizer.from_pretrained(
-                os.path.dirname(tokenizer_file_path), 
+                os.path.dirname(tokenizer_file_path),
                 trust_remote_code=trust_remote_code
             )
 
@@ -321,13 +558,122 @@ class SyntheticDataset(BaseDataset):
 
             # Generate random indices for valid IDs
             valid_indices = torch.where(valid_ids)[0]
-            self.logger.info(f"prefix length: {prefix_len}")
-            prefix_ids = self.generate_valid_random_ids(valid_indices, prefix_len)
-            prefix_str = tokenizer_model.decode(prefix_ids)
-            for _ in tqdm(range(request_count), desc="Constructing synthetic tokenid datasets ..."):
-                input_ids = self.generate_valid_random_ids(valid_indices, request_size)
-                decode_str = prefix_str + tokenizer_model.decode(input_ids)
-                dataset.append({"question":decode_str,"answer":"aaa"})
+
+            # Check if using distribution config or fixed RequestSize
+            input_config = tokenid_config.get("Input", None)
+            output_config = tokenid_config.get("Output", None)
+            request_size = tokenid_config.get("RequestSize", None)
+            prefix_len = tokenid_config.get("PrefixLen", 0)
+
+            # Initialize prefix pool if Input.MaxValue is specified
+            prefix_pool = None
+            prefix_pool_size = 0
+            if input_config is not None:
+                input_max_value = input_config.get("Params", {}).get("MaxValue", None)
+                if input_max_value is not None:
+                    # Initialize prefix pool with size = Input.MaxValue
+                    prefix_pool_size = input_max_value
+                    # Use fixed seed for reproducibility
+                    torch.manual_seed(42)
+                    prefix_pool = self.generate_valid_random_ids(valid_indices, prefix_pool_size)
+                    self.logger.info(f"Initialized prefix pool with size: {prefix_pool_size}")
+
+            # Determine if using distribution or fixed size
+            use_distribution = input_config is not None
+
+            if use_distribution:
+                # Use distribution-based sampling
+                input_method = input_config["Method"]
+                input_params = input_config["Params"]
+
+                # Sample input/output lengths for each request
+                num_input_output_tokens = []
+                for _ in range(request_count):
+                    input_length = self.sample_one_value(input_method, input_params)
+                    if output_config is not None:
+                        output_method = output_config["Method"]
+                        output_params = output_config["Params"]
+                        output_length = self.sample_one_value(output_method, output_params)
+                    else:
+                        output_length = None
+                    num_input_output_tokens.append((input_length, output_length))
+            else:
+                # Use fixed RequestSize (backward compatibility)
+                if request_size is None:
+                    raise ValueError("RequestSize must be specified when Input/Output distribution is not used.")
+                # Calculate actual prefix length for fixed size mode
+                if isinstance(prefix_len, float):
+                    # Fractional prefix: calculate based on request_size
+                    fixed_prefix_len = int(request_size * prefix_len)
+                else:
+                    fixed_prefix_len = prefix_len
+                remaining_size = request_size - fixed_prefix_len
+                if remaining_size < 0:
+                    raise ValueError(f"PrefixLen ({fixed_prefix_len}) cannot be greater than RequestSize ({request_size})")
+                num_input_output_tokens = [(request_size, None) for _ in range(request_count)]
+
+            # Generate datasets
+            for idx, (input_length, output_length) in enumerate(tqdm(num_input_output_tokens, desc="Constructing synthetic tokenid datasets ...")):
+                # Calculate actual prefix length for this request
+                if use_distribution:
+                    # In distribution mode, calculate based on input_length
+                    if isinstance(prefix_len, float):
+                        actual_prefix_len = int(input_length * prefix_len)
+                    else:
+                        actual_prefix_len = prefix_len
+                else:
+                    # In fixed size mode, use pre-calculated fixed_prefix_len
+                    actual_prefix_len = fixed_prefix_len
+
+                # Select prefix tokenids
+                if actual_prefix_len > 0:
+                    if prefix_pool is not None and prefix_pool_size > 0:
+                        # Select from pre-initialized pool
+                        if actual_prefix_len > prefix_pool_size:
+                            # If needed length exceeds pool, repeat or extend
+                            repeat_times = (actual_prefix_len // prefix_pool_size) + 1
+                            extended_pool = torch.cat([prefix_pool] * repeat_times)
+                            prefix_tokenids = extended_pool[:actual_prefix_len]
+                        else:
+                            # Select from pool - always start from beginning for same-length prefixes
+                            # This ensures prefixes of the same length are reused
+                            start_idx = 0
+                            # Handle wrap-around case if prefix length exceeds pool
+                            if actual_prefix_len <= prefix_pool_size:
+                                # Simple case: can take contiguous slice from start
+                                prefix_tokenids = prefix_pool[start_idx:start_idx + actual_prefix_len]
+                            else:
+                                # Wrap-around case: need to concatenate from end and beginning
+                                # Repeat the pool to cover the needed length
+                                repeat_times = (actual_prefix_len // prefix_pool_size) + 1
+                                extended_pool = torch.cat([prefix_pool] * repeat_times)
+                                prefix_tokenids = extended_pool[:actual_prefix_len]
+                    else:
+                        # Generate new prefix tokenids
+                        prefix_tokenids = self.generate_valid_random_ids(valid_indices, actual_prefix_len)
+                else:
+                    prefix_tokenids = torch.tensor([], dtype=torch.int64)
+
+                # Generate remaining tokenids
+                remaining_length = input_length - actual_prefix_len
+                if remaining_length > 0:
+                    remaining_tokenids = self.generate_valid_random_ids(valid_indices, remaining_length)
+                    # Combine prefix and remaining tokenids
+                    all_tokenids = torch.cat([prefix_tokenids, remaining_tokenids])
+                else:
+                    all_tokenids = prefix_tokenids
+
+                # Decode to prompt
+                prompt = tokenizer_model.decode(all_tokenids.tolist(), skip_special_tokens=True)
+
+                # Adjust to ensure exact token length
+                prompt = self._adjust_prompt_length(tokenizer_model, prompt, input_length)
+
+                # Create dataset entry
+                entry = {"question": prompt, "answer": "aaa"}
+                if output_length is not None:
+                    entry["max_out_len"] = output_length
+                dataset.append(entry)
 
         else:
             raise ValueError(f"Invalid type:{config_type}. Should choose one from {{string, tokenid}}")

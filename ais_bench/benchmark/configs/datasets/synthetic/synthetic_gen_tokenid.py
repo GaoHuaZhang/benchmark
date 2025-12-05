@@ -4,7 +4,7 @@ from ais_bench.benchmark.openicl.icl_inferencer import GenInferencer
 from ais_bench.benchmark.datasets import SyntheticDataset, MATHEvaluator, math_postprocess_v2
 
 synthetic_reader_cfg = dict(
-    input_columns=['question'],
+    input_columns=['question', 'max_out_len'],
     output_column='answer'
 )
 
@@ -13,9 +13,17 @@ synthetic_config = {
     "RequestCount": 10,
     "TrustRemoteCode": False,
     "TokenIdConfig" : {
-        "RequestSize": 10,
-        "PrefixLen": 0,
-    }
+        "Input" : {
+            "Method": "uniform",
+            "Params": {"MinValue": 1, "MaxValue": 200}
+        },
+        "Output" : {
+            "Method": "gaussian",
+            "Params": {"Mean": 100, "Var": 200, "MinValue": 1, "MaxValue": 100}
+        },
+        "PrefixLen": 0
+
+    },
 }
 
 synthetic_infer_cfg = dict(
