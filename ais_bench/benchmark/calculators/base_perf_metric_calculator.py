@@ -4,6 +4,9 @@ import math
 import numpy as np
 from abc import abstractmethod, ABC
 
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 from ais_bench.benchmark.utils.logging.logger import AISLogger
 from ais_bench.benchmark.global_consts import LOG_LEVEL
 from ais_bench.benchmark.utils.logging.exceptions import AISBenchMetricError, AISBenchDumpError
@@ -578,3 +581,163 @@ class BasePerfMetricCalculator(ABC):
         self.logger.debug(f"Saving performance data to CSV file: {out_path}")
         self._export_to_csv(self.metrics, out_path)
         self.logger.debug(f"Performance data successfully saved to {out_path}")
+
+    def generate_histogram_html(self, output_path: str):
+        """
+        Generate histogram distribution visualization HTML for all metrics.
+
+        Creates a comprehensive HTML file with histogram charts for each metric
+        across all stages, showing the distribution of values.
+
+        Args:
+            output_path (str): Path to output HTML file
+        """
+        if not hasattr(self, 'result') or not self.result:
+            self.logger.warning("No result data available for histogram generation, skipping.")
+            return
+
+        self.logger.debug("Generating histogram HTML visualization...")
+
+        # Collect all metrics and stages
+        all_metrics = set()
+        all_stages = set()
+        for stage_name, stage_data in self.result.items():
+            all_stages.add(stage_name)
+            all_metrics.update(stage_data.keys())
+
+        if not all_metrics:
+            self.logger.warning("No metrics found for histogram generation, skipping.")
+            return
+
+        # Filter out metrics that shouldn't be visualized as histograms
+        # (e.g., batch sizes that are already processed)
+        metrics_to_visualize = [
+            m for m in sorted(all_metrics)
+            if m not in {"PrefillBatchsize", "DecoderBatchsize"}
+        ]
+
+        if not metrics_to_visualize:
+            self.logger.warning("No suitable metrics for histogram visualization, skipping.")
+            return
+
+        # Calculate number of subplots needed
+        num_metrics = len(metrics_to_visualize)
+        num_stages = len(all_stages)
+
+        # Create subplots: one row per metric, one column per stage
+        fig = make_subplots(
+            rows=num_metrics,
+            cols=num_stages,
+            subplot_titles=[
+                f"{metric} - {stage}"
+                for metric in metrics_to_visualize
+                for stage in sorted(all_stages)
+            ],
+            vertical_spacing=0.08,
+            horizontal_spacing=0.1
+        )
+
+        # Generate histogram for each metric-stage combination
+        for metric_idx, metric in enumerate(metrics_to_visualize):
+            for stage_idx, stage_name in enumerate(sorted(all_stages)):
+                row = metric_idx + 1
+                col = stage_idx + 1
+
+                # Get data for this metric and stage
+                if stage_name not in self.result or metric not in self.result[stage_name]:
+                    self.logger.debug(f"No data for {metric} in stage {stage_name}, skipping.")
+                    continue
+
+                data = self.result[stage_name][metric]
+                if not data:
+                    self.logger.debug(f"Empty data for {metric} in stage {stage_name}, skipping.")
+                    continue
+
+                # Flatten data if it contains numpy arrays
+                if isinstance(data, list) and len(data) > 0:
+                    if isinstance(data[0], np.ndarray):
+                        flat_data = np.concatenate(data)
+                    else:
+                        flat_data = np.array(data)
+                else:
+                    flat_data = np.array(data)
+
+                # Remove invalid values (NaN, inf)
+                flat_data = flat_data[np.isfinite(flat_data)]
+
+                if len(flat_data) == 0:
+                    self.logger.debug(f"No valid data for {metric} in stage {stage_name}, skipping.")
+                    continue
+
+                # Calculate optimal number of bins using Freedman-Diaconis rule
+                if len(flat_data) > 1:
+                    iqr = np.percentile(flat_data, 75) - np.percentile(flat_data, 25)
+                    bin_width = 2 * iqr / (len(flat_data) ** (1/3))
+                    if bin_width > 0:
+                        num_bins = max(10, min(50, int((flat_data.max() - flat_data.min()) / bin_width)))
+                    else:
+                        num_bins = 30
+                else:
+                    num_bins = 10
+
+                # Create histogram
+                fig.add_trace(
+                    go.Histogram(
+                        x=flat_data,
+                        nbinsx=num_bins,
+                        name=f"{metric} - {stage_name}",
+                        showlegend=False,
+                        marker=dict(
+                            color='rgba(55, 128, 191, 0.7)',
+                            line=dict(color='rgba(55, 128, 191, 1.0)', width=1)
+                        ),
+                        hovertemplate=f'<b>{metric} - {stage_name}</b><br>' +
+                                     'Value: %{x}<br>' +
+                                     'Count: %{y}<extra></extra>'
+                    ),
+                    row=row,
+                    col=col
+                )
+
+                # Update x-axis label
+                fig.update_xaxes(
+                    title_text=metric,
+                    row=row,
+                    col=col
+                )
+
+                # Update y-axis label (only for first column)
+                if col == 1:
+                    fig.update_yaxes(
+                        title_text="Frequency",
+                        row=row,
+                        col=col
+                    )
+
+        # Update layout
+        fig.update_layout(
+            title_text="Performance Metrics Distribution Histograms",
+            title_x=0.5,
+            height=300 * num_metrics,
+            showlegend=False,
+            template="plotly_white"
+        )
+
+        # Save to HTML
+        try:
+            fig.write_html(
+                output_path,
+                include_plotlyjs="cdn",
+                config={
+                    'scrollZoom': True,
+                    'plotGlPixelRatio': 1,
+                    'showLink': False,
+                    'displaylogo': False,
+                    'responsive': True
+                },
+                auto_open=False,
+                full_html=True
+            )
+            self.logger.info(f"Histogram visualization saved to {output_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save histogram HTML to {output_path}: {e}")

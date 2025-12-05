@@ -55,7 +55,7 @@ class AISTokenizer:
         elif isinstance(prompt, str):
             messages = prompt
         else:
-            # self.logger.error(f"Prompt: {prompt} is not a list or string.")
+            self.logger.debug(f"Prompt: {prompt} is not a list or string.")
             return []
         tokens = self.tokenizer.encode(messages, add_special_tokens=add_special_tokens)
         return tokens
