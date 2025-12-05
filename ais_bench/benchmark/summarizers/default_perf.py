@@ -308,7 +308,7 @@ class DefaultPerfSummarizer:
         """Dump calculated performance data to files.
 
         Saves both JSON and CSV formats for each model and dataset combination.
-        Also generates histogram distribution HTML visualizations for all metrics.
+        Also generates density curve distribution HTML visualizations for all metrics.
         """
         for model, calc_per_ds in self.calculators.items():
             for dataset, calc in calc_per_ds.items():
@@ -319,9 +319,9 @@ class DefaultPerfSummarizer:
                     osp.join(output_filepath, dataset + ".json"),
                 )
                 calc.save_performance(osp.join(output_filepath, dataset + ".csv"))
-                # Generate histogram distribution HTML visualization
-                histogram_html_path = osp.join(output_filepath, dataset + "_histogram.html")
-                calc.generate_histogram_html(histogram_html_path)
+                # Generate density curve distribution HTML visualization
+                curve_html_path = osp.join(output_filepath, dataset + "_curve.html")
+                calc.generate_curve_html(curve_html_path)
 
     def _pick_up_results(self):
         """Pick up performance results from files.

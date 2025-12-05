@@ -6,6 +6,7 @@ from abc import abstractmethod, ABC
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy import stats
 
 from ais_bench.benchmark.utils.logging.logger import AISLogger
 from ais_bench.benchmark.global_consts import LOG_LEVEL
@@ -582,21 +583,21 @@ class BasePerfMetricCalculator(ABC):
         self._export_to_csv(self.metrics, out_path)
         self.logger.debug(f"Performance data successfully saved to {out_path}")
 
-    def generate_histogram_html(self, output_path: str):
+    def generate_curve_html(self, output_path: str):
         """
-        Generate histogram distribution visualization HTML for all metrics.
+        Generate density curve distribution visualization HTML for all metrics.
 
-        Creates a comprehensive HTML file with histogram charts for each metric
-        across all stages, showing the distribution of values.
+        Creates a comprehensive HTML file with density curve charts (KDE) for each metric
+        across all stages, showing the smooth distribution of values.
 
         Args:
             output_path (str): Path to output HTML file
         """
         if not hasattr(self, 'result') or not self.result:
-            self.logger.warning("No result data available for histogram generation, skipping.")
+            self.logger.warning("No result data available for curve generation, skipping.")
             return
 
-        self.logger.debug("Generating histogram HTML visualization...")
+        self.logger.debug("Generating density curve HTML visualization...")
 
         # Collect all metrics and stages
         all_metrics = set()
@@ -606,10 +607,10 @@ class BasePerfMetricCalculator(ABC):
             all_metrics.update(stage_data.keys())
 
         if not all_metrics:
-            self.logger.warning("No metrics found for histogram generation, skipping.")
+            self.logger.warning("No metrics found for curve generation, skipping.")
             return
 
-        # Filter out metrics that shouldn't be visualized as histograms
+        # Filter out metrics that shouldn't be visualized as curves
         # (e.g., batch sizes that are already processed)
         metrics_to_visualize = [
             m for m in sorted(all_metrics)
@@ -617,7 +618,7 @@ class BasePerfMetricCalculator(ABC):
         ]
 
         if not metrics_to_visualize:
-            self.logger.warning("No suitable metrics for histogram visualization, skipping.")
+            self.logger.warning("No suitable metrics for curve visualization, skipping.")
             return
 
         # Calculate number of subplots needed
@@ -637,7 +638,7 @@ class BasePerfMetricCalculator(ABC):
             horizontal_spacing=0.1
         )
 
-        # Generate histogram for each metric-stage combination
+        # Generate density curve for each metric-stage combination
         for metric_idx, metric in enumerate(metrics_to_visualize):
             for stage_idx, stage_name in enumerate(sorted(all_stages)):
                 row = metric_idx + 1
@@ -669,54 +670,204 @@ class BasePerfMetricCalculator(ABC):
                     self.logger.debug(f"No valid data for {metric} in stage {stage_name}, skipping.")
                     continue
 
-                # Calculate optimal number of bins using Freedman-Diaconis rule
-                if len(flat_data) > 1:
-                    iqr = np.percentile(flat_data, 75) - np.percentile(flat_data, 25)
-                    bin_width = 2 * iqr / (len(flat_data) ** (1/3))
-                    if bin_width > 0:
-                        num_bins = max(10, min(50, int((flat_data.max() - flat_data.min()) / bin_width)))
-                    else:
-                        num_bins = 30
-                else:
-                    num_bins = 10
+                # Handle single value or all values identical
+                unique_values = np.unique(flat_data)
+                if len(unique_values) == 1:
+                    # Single value case: display as a vertical line with annotation
+                    single_value = unique_values[0]
+                    # Create a small range around the value for visualization
+                    value_range = max(abs(single_value) * 0.1, 1.0) if single_value != 0 else 1.0
+                    x_min = single_value - value_range
+                    x_max = single_value + value_range
 
-                # Create histogram
-                fig.add_trace(
-                    go.Histogram(
-                        x=flat_data,
-                        nbinsx=num_bins,
-                        name=f"{metric} - {stage_name}",
-                        showlegend=False,
-                        marker=dict(
-                            color='rgba(55, 128, 191, 0.7)',
-                            line=dict(color='rgba(55, 128, 191, 1.0)', width=1)
+                    # Create a vertical line at the value
+                    x_line = [single_value, single_value]
+                    y_line = [0, 1]  # Normalized height
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_line,
+                            y=y_line,
+                            mode='lines+markers',
+                            name=f"{metric} - {stage_name}",
+                            showlegend=False,
+                            line=dict(
+                                color='rgba(55, 128, 191, 0.8)',
+                                width=3
+                            ),
+                            marker=dict(
+                                size=10,
+                                color='rgba(55, 128, 191, 1.0)',
+                                symbol='diamond'
+                            ),
+                            hovertemplate=f'<b>{metric} - {stage_name}</b><br>' +
+                                         f'Value: {single_value:.4f}<br>' +
+                                         f'Count: {len(flat_data)}<br>' +
+                                         '<i>All values are identical</i><extra></extra>'
                         ),
-                        hovertemplate=f'<b>{metric} - {stage_name}</b><br>' +
-                                     'Value: %{x}<br>' +
-                                     'Count: %{y}<extra></extra>'
-                    ),
-                    row=row,
-                    col=col
-                )
-
-                # Update x-axis label
-                fig.update_xaxes(
-                    title_text=metric,
-                    row=row,
-                    col=col
-                )
-
-                # Update y-axis label (only for first column)
-                if col == 1:
-                    fig.update_yaxes(
-                        title_text="Frequency",
                         row=row,
                         col=col
                     )
 
+                    # Add annotation showing the value
+                    fig.add_annotation(
+                        x=single_value,
+                        y=0.5,
+                        text=f"Value: {single_value:.4f}<br>({len(flat_data)} samples)",
+                        showarrow=True,
+                        arrowhead=2,
+                        arrowcolor='rgba(55, 128, 191, 0.8)',
+                        bgcolor='rgba(255, 255, 255, 0.9)',
+                        bordercolor='rgba(55, 128, 191, 0.8)',
+                        borderwidth=1,
+                        row=row,
+                        col=col
+                    )
+
+                    # Update axes
+                    fig.update_xaxes(
+                        title_text=metric,
+                        range=[x_min, x_max],
+                        row=row,
+                        col=col
+                    )
+
+                    if col == 1:
+                        fig.update_yaxes(
+                            title_text="Normalized",
+                            range=[0, 1.1],
+                            row=row,
+                            col=col
+                        )
+                    continue
+
+                # Need at least 2 distinct points for KDE
+                if len(flat_data) < 2:
+                    # Fallback: show as a point
+                    single_value = flat_data[0]
+                    value_range = max(abs(single_value) * 0.1, 1.0) if single_value != 0 else 1.0
+                    x_min = single_value - value_range
+                    x_max = single_value + value_range
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[single_value],
+                            y=[1],
+                            mode='markers',
+                            name=f"{metric} - {stage_name}",
+                            showlegend=False,
+                            marker=dict(
+                                size=15,
+                                color='rgba(55, 128, 191, 1.0)',
+                                symbol='diamond',
+                                line=dict(width=2, color='rgba(55, 128, 191, 0.8)')
+                            ),
+                            hovertemplate=f'<b>{metric} - {stage_name}</b><br>' +
+                                         f'Value: {single_value:.4f}<extra></extra>'
+                        ),
+                        row=row,
+                        col=col
+                    )
+
+                    fig.update_xaxes(
+                        title_text=metric,
+                        range=[x_min, x_max],
+                        row=row,
+                        col=col
+                    )
+
+                    if col == 1:
+                        fig.update_yaxes(
+                            title_text="",
+                            range=[0.8, 1.2],
+                            row=row,
+                            col=col
+                        )
+                    continue
+
+                try:
+                    # Calculate KDE (Kernel Density Estimation)
+                    # Handle case where all values are very close (low variance)
+                    data_std = flat_data.std()
+                    if data_std < 1e-10:
+                        # All values are essentially the same, use a small bandwidth
+                        kde = stats.gaussian_kde(flat_data)
+                        kde.set_bandwidth(kde.factor * 0.1)  # Use smaller bandwidth
+                    else:
+                        kde = stats.gaussian_kde(flat_data)
+
+                    # Create evaluation points for smooth curve
+                    data_min = flat_data.min()
+                    data_max = flat_data.max()
+                    data_range = data_max - data_min
+
+                    # Extend range slightly for better visualization
+                    # Use a minimum range to avoid too narrow plots
+                    min_range = max(data_range, abs(data_min) * 0.1, abs(data_max) * 0.1, 1.0)
+                    if data_range < min_range * 0.1:
+                        # Very small range, extend more
+                        x_min = data_min - min_range * 0.2
+                        x_max = data_max + min_range * 0.2
+                    else:
+                        x_min = data_min - 0.1 * data_range
+                        x_max = data_max + 0.1 * data_range
+
+                    # Generate smooth curve points
+                    num_points = min(500, max(100, len(flat_data) * 2))
+                    x_curve = np.linspace(x_min, x_max, num_points)
+                    y_curve = kde(x_curve)
+
+                    # Normalize y_curve to make it more visually appealing
+                    if y_curve.max() > 0:
+                        y_curve = y_curve / y_curve.max()
+
+                    # Create density curve
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_curve,
+                            y=y_curve,
+                            mode='lines',
+                            name=f"{metric} - {stage_name}",
+                            showlegend=False,
+                            line=dict(
+                                color='rgba(55, 128, 191, 0.8)',
+                                width=2
+                            ),
+                            fill='tozeroy',
+                            fillcolor='rgba(55, 128, 191, 0.2)',
+                            hovertemplate=f'<b>{metric} - {stage_name}</b><br>' +
+                                         'Value: %{x:.4f}<br>' +
+                                         'Density: %{y:.4f}<br>' +
+                                         f'Samples: {len(flat_data)}<extra></extra>'
+                        ),
+                        row=row,
+                        col=col
+                    )
+
+                    # Update x-axis label
+                    fig.update_xaxes(
+                        title_text=metric,
+                        row=row,
+                        col=col
+                    )
+
+                    # Update y-axis label (only for first column)
+                    if col == 1:
+                        fig.update_yaxes(
+                            title_text="Normalized Density",
+                            range=[0, 1.1],
+                            row=row,
+                            col=col
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to generate KDE curve for {metric} in stage {stage_name}: {e}"
+                    )
+                    continue
+
         # Update layout
         fig.update_layout(
-            title_text="Performance Metrics Distribution Histograms",
+            title_text="Performance Metrics Density Distribution Curves (KDE)",
             title_x=0.5,
             height=300 * num_metrics,
             showlegend=False,
@@ -738,6 +889,6 @@ class BasePerfMetricCalculator(ABC):
                 auto_open=False,
                 full_html=True
             )
-            self.logger.info(f"Histogram visualization saved to {output_path}")
+            self.logger.info(f"Density curve visualization saved to {output_path}")
         except Exception as e:
-            self.logger.warning(f"Failed to save histogram HTML to {output_path}: {e}")
+            self.logger.warning(f"Failed to save curve HTML to {output_path}: {e}")
