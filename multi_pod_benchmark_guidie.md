@@ -12,7 +12,6 @@
 
 ## 环境准备
 
-
 ## 准备工作
 
 ### 1. 配置文件准备
@@ -105,29 +104,6 @@ model_dataset_combinations = [
 2. **唯一标识 `abbr`**：确保每个模型和数据集的 `abbr` 参数唯一，用于区分不同的测试任务
 3. **模型配置**：根据实际需求配置模型的路径、名称、batch_size等参数
 
-### 2. 合并配置准备
-
-创建合并配置文件（如 `merge_config.py`），用于合并多个Pod的结果：
-
-```python
-from mmengine.config import read_base
-with read_base():
-    from ais_bench.benchmark.configs.summarizers.example import summarizer
-    from ais_bench.benchmark.configs.models.vllm_api.vllm_api_stream_chat import (
-        models as vllm_api_stream_chat,
-    )
-    from ais_bench.benchmark.configs.datasets.synthetic.synthetic_gen_string import (
-        synthetic_datasets,
-    )
-
-datasets = synthetic_datasets
-models = vllm_api_stream_chat
-
-models[0]['abbr'] = "merge_results"
-models[0]['path'] = "/home/theone/weight/DeepSeek-R1"
-datasets[0]['abbr'] = "merged"
-```
-
 ## 运行步骤
 
 ### 1. 执行基准测试
@@ -142,11 +118,11 @@ bash multi_pod_benchmark.sh
 
 ```bash
 # 1. 运行性能评测
-ais_bench demo_infer_vllm_api_perf_dev.py \
-  -m perf \
-  --max-num-workers 2 \
-  --pressure \
-  --pressure-time 10
+ais_bench  ./demo_infer_vllm_api_perf_dev.py / # 性能评测配置文件参考
+-m perf / # 运行模式，不要改
+--max-num-workers 2  # 最大并行任务数，范围 [1, CPU 核数]，默认 1。
+# --pressure \ # 是否启用压力测试，默认 False。 需要开启时取消注释 ，压测相关概念参考：https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/advanced_tutorials/stable_stage.html#id16
+# --pressure-time 10 \ # 压力测试时间, 默认为15s，建议为平均e2el的三倍
 
 # 2. 合并 performances 目录下的结果
 python merge_performances.py
@@ -220,7 +196,7 @@ db_data: 数据库数据,保存了每个chunk返回的时间戳
 *_details.jsonl: 详细结果,保存了每个请求的详细信息
 *.csv: 性能结果,保存了case力度的性能结果，例如TTFT,TPOT,E2EL等
 *.json: 性能结果,保存了全局力度的性能结果，例如Throughput，QPS等
-详情可参考社区资料：https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/base_tutorials/results_intro/performance_metric.html#id2
+详情可参考社区资料：<https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/base_tutorials/results_intro/performance_metric.html#id2>
 
 ## 注意事项
 
@@ -274,11 +250,15 @@ db_data: 数据库数据,保存了每个chunk返回的时间戳
 - 增加 `--pressure-time` 参数值
 - 建议设置为平均 E2EL 的三倍以上
 
+### 问题4： 支持的数据集类型,如何使用自定义数据集
+
+- 示例中使用的是合成数据集，内容全为"A "，如果要使用自定义数据集，可以参考:<https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/advanced_tutorials/custom_dataset.html#id4> 准备自定义数据集，并使用ais_bench/benchmark/configs/datasets/custom/custom_qa_gen.py 或 ais_bench/benchmark/configs/datasets/custom/custom_qa_mcq.py 配置文件。
+
+### 问题5：合并结果的 Max Concurrency 为什么等于1
+
+合并结果时无法获取其他模型配置的并发，该值为模型默认值，实际最大并发为配置文件中所有models的batch_size之和
+
 ## 参考文档
 
 - [自定义配置文件运行AISBench](https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/advanced_tutorials/run_custom_config.html)
 - [AISBench 完整文档](https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/index.html)
-
-### 问题4： 支持的数据集类型,如何使用自定义数据集
-
-- 示例中使用的是合成数据集，内容全为"A "，如果要使用自定义数据集，可以参考:https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/advanced_tutorials/custom_dataset.html#id4 准备自定义数据集，并使用ais_bench/benchmark/configs/datasets/custom/custom_qa_gen.py 或 ais_bench/benchmark/configs/datasets/custom/custom_qa_mcq.py 配置文件。
