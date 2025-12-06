@@ -288,11 +288,6 @@ class MooncakeTraceDataset(BaseDataset):
         return prompt
 
     def load(self, path, model_path, prefix_ratio=0, generated_prompts_path=""):
-        # Use global shared hash_id_cache
-        # 确保logger存在（可能在load方法被单独调用时不存在）
-        if not hasattr(self, 'logger'):
-            self.logger = AISLogger()
-
         path = get_data_path(path)
         self.logger.info(f"Loading mooncake trace dataset from: {path}")
 
@@ -386,7 +381,6 @@ class MooncakeTraceDataset(BaseDataset):
                 item["timestamp"] = data["timestamp"]
             dataset.append(item)
 
-        # 保存生成的dataset到文件
         self.logger.info(f"Generated {len(dataset)} prompts, saving to cache file: {generated_prompts_path}")
         dataset_obj = Dataset.from_list(dataset)
         with open(generated_prompts_path, "w", encoding="utf-8") as f:

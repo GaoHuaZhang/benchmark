@@ -441,11 +441,18 @@ class BaseApiInferencer(BaseInferencer):
                     acquired = await asyncio.to_thread(token_bucket.acquire, timeout=1)
                     if not acquired:
                         continue
+                    data = await self.wait_get_data(async_queue, stop_event)
                 else:
-                    # Slightly limit RR when no token to avoid high CPU usage causing TTFT accumulation
-                    await asyncio.sleep(BLOCK_INTERVAL)
-
-                data = await self.wait_get_data(async_queue, stop_event)
+                    data = await self.wait_get_data(async_queue, stop_event)
+                    if data:
+                        delay_time = data.get('timestamp')
+                        if delay_time is not None:
+                            sleep_interval = max(0, delay_time - (time.perf_counter() - start_time))
+                        else:
+                            # Slightly limit RR when no token to avoid high CPU usage causing TTFT accumulation
+                            sleep_interval = BLOCK_INTERVAL
+                        if sleep_interval:
+                            await asyncio.sleep(sleep_interval)
 
                 # data == None -> sentinel
                 if data is None:

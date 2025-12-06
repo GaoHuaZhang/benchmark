@@ -165,4 +165,14 @@ class GenInferencer(BaseApiInferencer, BaseLocalInferencer):
             for index, max_out_len in enumerate(max_out_lens):
                 data_list[index]["max_out_len"] = max_out_len if max_out_len else self.model.max_out_len
 
+        timestamps = retriever.dataset_reader.get_timestamp()
+        if timestamps is not None:
+            if self.model_cfg.get('request_rate'):
+                self.logger.warning("Found timestamps in datasets but `request_rate` is configured, ignore timestamps")
+                timestamps = None
+            else:
+                self.logger.info("Found timestamps in datasets, use timestamps for request delay")
+                for index, timestamp in enumerate(timestamps):
+                    data_list[index]["timestamp"] = timestamp / 1000 # ms to s
+        print(f"{timestamps=}")
         return data_list
