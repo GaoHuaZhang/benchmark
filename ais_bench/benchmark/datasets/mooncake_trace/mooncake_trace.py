@@ -10,10 +10,20 @@ from ais_bench.benchmark.datasets.base import BaseDataset
 from ais_bench.benchmark.utils.file.load_tokenizer import load_tokenizer
 from ais_bench.benchmark.openicl.icl_evaluator.icl_base_evaluator import BaseEvaluator
 
+
 @LOAD_DATASET.register_module()
 class MooncakeTraceDataset(BaseDataset):
 
-    def prompts_generator(self, tokenizer, token_length, hash_ids, block_size=512, hash_id_cache=None):
+    def prompts_generator(
+        self,
+        tokenizer,
+        token_length,
+        hash_ids,
+        block_size=512,
+        hash_id_cache=None,
+        prefix_ratio=0,
+        prefix_pool=None,
+    ):
         """Generate a prompt based on hash_ids and token_length.
 
         The generated prompt will have exactly token_length tokens when encoded by the tokenizer.
@@ -24,6 +34,8 @@ class MooncakeTraceDataset(BaseDataset):
             hash_ids: List of hash IDs, each representing a block of tokens
             block_size: Number of tokens per hash block (default 512)
             hash_id_cache: Dictionary to cache prompts by hash_id
+            prefix_ratio: Ratio of prefix tokens when hash_ids is empty (default 0)
+            prefix_pool: List of token IDs to use as prefix pool (default None)
 
         Returns:
             str: Generated prompt text that encodes to exactly token_length tokens
@@ -32,9 +44,10 @@ class MooncakeTraceDataset(BaseDataset):
             hash_id_cache = {}
 
         if not hash_ids:
-            # If no hash_ids, generate a simple prompt with token_length tokens
-            # Use iterative approach to ensure exact token count
-            return self._generate_prompt_with_exact_length(tokenizer, token_length)
+            # If no hash_ids, generate a prompt with prefix_ratio prefix from pool
+            return self._generate_prompt_with_prefix(
+                tokenizer, token_length, prefix_ratio, prefix_pool
+            )
 
         final_prompt_tokens = []
         current_block_size = block_size
@@ -59,7 +72,10 @@ class MooncakeTraceDataset(BaseDataset):
                 # Generate new tokens for this hash_id
                 # Use a deterministic seed based on hash_id for reproducibility
                 random.seed(hash_id)
-                tokens = [random.randint(0, tokenizer.vocab_size - 1) for _ in range(current_block_size)]
+                tokens = [
+                    random.randint(0, tokenizer.vocab_size - 1)
+                    for _ in range(current_block_size)
+                ]
                 hash_id_cache[hash_id] = tokens
                 random.seed()  # Reset seed
 
@@ -71,8 +87,78 @@ class MooncakeTraceDataset(BaseDataset):
         # Adjust to ensure exact token length (accounting for potential token merging at boundaries)
         return self._adjust_prompt_length(tokenizer, combined_prompt, token_length)
 
-    def _generate_prompt_with_exact_length(self, tokenizer, token_length):
-        """Generate a prompt that encodes to exactly token_length tokens."""
+    def _generate_prompt_with_prefix(
+        self, tokenizer, token_length, prefix_ratio=0, prefix_pool=None
+    ):
+        """Generate a prompt with prefix from token ID pool and remaining tokens.
+
+        Args:
+            tokenizer: The tokenizer to use
+            token_length: Total number of tokens required
+            prefix_ratio: Ratio of prefix tokens (0-1)
+            prefix_pool: List of token IDs to use as prefix pool (None if not available)
+
+        Returns:
+            str: Generated prompt text that encodes to exactly token_length tokens
+        """
+        # Calculate prefix token length
+        prefix_token_length = (
+            int(token_length * prefix_ratio) if prefix_ratio > 0 else 0
+        )
+        remaining_token_length = token_length - prefix_token_length
+
+        # Select prefix from token ID pool
+        prefix_text = ""
+        if (
+            prefix_token_length > 0
+            and prefix_pool is not None
+            and len(prefix_pool) >= prefix_token_length
+        ):
+            # Select prefix_token_length tokens from prefix_pool
+            # Use deterministic selection based on token_length for reproducibility
+            start_idx = (token_length * 7) % (
+                len(prefix_pool) - prefix_token_length + 1
+            )
+            selected_prefix_token_ids = prefix_pool[
+                start_idx : start_idx + prefix_token_length
+            ]
+
+            # Decode token IDs to text
+            prefix_text = tokenizer.decode(
+                selected_prefix_token_ids, skip_special_tokens=True
+            )
+
+            # Verify and adjust if needed (in case decoding changes token count)
+            prefix_encoded = tokenizer.encode(prefix_text, add_special_tokens=False)
+            if len(prefix_encoded) != prefix_token_length:
+                # If decoding doesn't match, adjust the text
+                prefix_text = self._adjust_prompt_length(
+                    tokenizer, prefix_text, prefix_token_length
+                )
+        elif prefix_token_length > 0:
+            # Fallback: generate prefix if pool is not available or too small
+            prefix_text = self._generate_remaining_tokens(
+                tokenizer, prefix_token_length
+            )
+
+        # Generate remaining part
+        if remaining_token_length > 0:
+            # Generate remaining tokens using simple pattern
+            remaining_text = self._generate_remaining_tokens(
+                tokenizer, remaining_token_length
+            )
+            # Combine prefix and remaining
+            combined_prompt = (
+                prefix_text + " " + remaining_text if prefix_text else remaining_text
+            )
+        else:
+            combined_prompt = prefix_text
+
+        # Final adjustment to ensure exact token length
+        return self._adjust_prompt_length(tokenizer, combined_prompt, token_length)
+
+    def _generate_remaining_tokens(self, tokenizer, token_length):
+        """Generate text that encodes to approximately token_length tokens."""
         # Start with a simple pattern
         base_text = "A " * max(1, token_length // 2)
         return self._adjust_prompt_length(tokenizer, base_text, token_length)
@@ -171,12 +257,16 @@ class MooncakeTraceDataset(BaseDataset):
             max_fine_tune = 100  # Safety limit
             fine_tune_iter = 0
 
-            while current_length != target_token_length and fine_tune_iter < max_fine_tune:
+            while (
+                current_length != target_token_length and fine_tune_iter < max_fine_tune
+            ):
                 if current_length < target_token_length:
                     # Try adding different characters
                     for char in [" ", "A", "B", "C"]:
                         test_prompt = prompt + char
-                        test_encoded = tokenizer.encode(test_prompt, add_special_tokens=False)
+                        test_encoded = tokenizer.encode(
+                            test_prompt, add_special_tokens=False
+                        )
                         if len(test_encoded) == target_token_length:
                             return test_prompt
                         elif len(test_encoded) > target_token_length:
@@ -196,21 +286,40 @@ class MooncakeTraceDataset(BaseDataset):
 
         return prompt
 
-    def load(self, path, model_path, prefix_ratio=None):
+    def load(self, path, model_path, prefix_ratio=0):
         hash_id_cache = dict()
         tokenizer = load_tokenizer(model_path)
         path = get_data_path(path)
         json_data = []
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             for line in f:
                 data = json.loads(line.strip())
                 json_data.append(data)
-        json_data.sort(key=lambda x: x.get('timestamp', 0))
+        json_data.sort(key=lambda x: x.get("timestamp", 0))
+
+        # First pass: find maximum input_length
+        max_input_length = 0
+        for data in json_data:
+            input_length = data.get("input_length", 0)
+            if input_length > max_input_length:
+                max_input_length = input_length
+
+        # Generate prefix pool: a list of token IDs with length = max_input_length
+        prefix_pool = None
+        if max_input_length > 0 and prefix_ratio > 0:
+            # Use a fixed seed for reproducibility
+            random.seed(42)
+            prefix_pool = [
+                random.randint(0, tokenizer.vocab_size - 1)
+                for _ in range(max_input_length)
+            ]
+            random.seed()  # Reset seed
+
         dataset = []
         for data in json_data:
-            input_length = data.get('input_length', 0)
-            output_length = data.get('output_length', 0)
-            hash_ids = data.get('hash_ids', [])
+            input_length = data.get("input_length", 0)
+            output_length = data.get("output_length", 0)
+            hash_ids = data.get("hash_ids", [])
 
             # Generate prompt using hash_ids
             prompt = self.prompts_generator(
@@ -218,19 +327,22 @@ class MooncakeTraceDataset(BaseDataset):
                 token_length=input_length,
                 hash_ids=hash_ids,
                 block_size=512,
-                hash_id_cache=hash_id_cache
+                hash_id_cache=hash_id_cache,
+                prefix_ratio=prefix_ratio,
+                prefix_pool=prefix_pool,
             )
 
-            dataset.append({
-                "question": prompt,
-                "answer": "",  # Empty answer as placeholder
-                "max_out_len": output_length
-            })
+            dataset.append(
+                {
+                    "question": prompt,
+                    "answer": "",  # Empty answer as placeholder
+                    "max_out_len": output_length,
+                }
+            )
+            if "timestamp" in json_data:
+                dataset.append({"timestamp": json_data["timestamp"]})
 
         return Dataset.from_list(dataset)
-
-
-
 
 
 class MooncakeTraceEvaluator(BaseEvaluator):
