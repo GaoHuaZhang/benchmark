@@ -320,7 +320,7 @@ class DefaultPerfSummarizer:
                 )
                 calc.save_performance(osp.join(output_filepath, dataset + ".csv"))
                 # Generate density curve distribution HTML visualization
-                curve_html_path = osp.join(output_filepath, dataset + "_curve.html")
+                curve_html_path = osp.join(output_filepath, dataset + "_metric_plot.html")
                 calc.generate_curve_html(curve_html_path)
 
     def _pick_up_results(self):

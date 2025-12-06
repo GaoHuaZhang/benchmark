@@ -28,7 +28,7 @@ mooncake_trace_datasets = [
     dict(
         abbr='mooncake-trace',
         type=MooncakeTraceDataset,
-        path='', # 数据集路径，使用相对路径时相对于源码根路径，支持绝对路径
+        path='/home/theone/code/dev/benchmark/synthetic_trace_13.jsonl', # 数据集路径，使用相对路径时相对于源码根路径，支持绝对路径
         prefix_ratio=0.4,
         generated_prompts_path='', # 生成的prompt缓存路径，使用相对路径时相对于源码根路径，支持绝对路径
         reader_cfg=mooncake_trace_reader_cfg,

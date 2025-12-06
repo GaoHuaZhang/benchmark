@@ -174,5 +174,4 @@ class GenInferencer(BaseApiInferencer, BaseLocalInferencer):
                 self.logger.info("Found timestamps in datasets, use timestamps for request delay")
                 for index, timestamp in enumerate(timestamps):
                     data_list[index]["timestamp"] = timestamp / 1000 # ms to s
-        print(f"{timestamps=}")
         return data_list

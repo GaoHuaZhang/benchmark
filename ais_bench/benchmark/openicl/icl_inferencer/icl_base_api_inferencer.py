@@ -64,12 +64,16 @@ class BaseApiInferencer(BaseInferencer):
         self.global_lock = mp.Lock()
         # Cache for batch-prefetched data
         self._data_cache = []  # Thread-local cache for batch data
+        self.total_data_count = 0
 
     def set_global_index(self, global_index: mp.RawValue):
         self.global_index = global_index
 
     def set_global_lock(self, global_lock: mp.Lock):
         self.global_lock = global_lock
+
+    def set_total_data_count(self, total_data_count: int):
+        self.total_data_count = total_data_count
 
     def _monitor_status_thread(
         self,
@@ -255,16 +259,26 @@ class BaseApiInferencer(BaseInferencer):
             # Calculate end index
             data_index_end = data_index_start + data_fetch_size
             # Get indices
-            end_index = data_index_end % len(indexes)
+            # Initialize end_index to start_index, will be updated in loop
+            end_index = data_index_start
             for index_id in range(data_index_start, data_index_end):
                 cur_index = index_id % len(indexes)
-                data_indices.append(cur_index)
+                # Check if index is None first
                 if indexes[cur_index] is None:
                     end_index = cur_index
                     break
+                # Check total_data_count before adding to data_indices
+                if not self.pressure_mode:
+                    if not self.total_data_count:
+                        end_index = cur_index
+                        break
+                    self.total_data_count -= 1
+                # Only add to data_indices after all checks pass
+                data_indices.append(cur_index)
+                # Update end_index to next index after successfully adding
+                end_index = (cur_index + 1) % len(indexes)
             # Update global index
             self.global_index.value = end_index
-
         # Prefetch all data in the batch
         batch_data = []
         for data_index in data_indices:
