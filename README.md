@@ -32,8 +32,8 @@
   - ✨ **架构升级**：对cli、models、inferencer、tasks组件进行了全面重构，支持快速接入新的测试基准，参考📚 [开发者文档](https://ais-bench-benchmark-rf.readthedocs.io/zh-cn/latest/develop_guide/contributing.html)了解详情！
   - 🖥️ **任务管理界面**：全新的任务UI管理界面，支持同时监控每个任务的详细执行状态，包括任务名称、进度、时间成本、状态、日志路径、扩展参数等，让任务执行状态一目了然！
   - ⚡ **并行执行增强**：扩展了多任务并行功能，支持多个性能或精度测评任务并行执行，大幅提升评测效率！
-  - 📊 **新增18+测评基准**：新增docvqa、infovqa、ocrbench_v2、omnidocbench、mmmu、mmmu_pro、mmstar、videomme、FewCLUE系列、dapo_math、leval等多模态和文本测评基准！
-  - 🤖 **新增模型支持**：新增vllm/vllm ascend VL 离线推理模型支持！
+  - 📊 **新增15+测评基准**：新增docvqa、infovqa、ocrbench_v2、omnidocbench、mmmu、mmmu_pro、mmstar、videomme、FewCLUE系列、dapo_math、leval等多模态和文本测评基准！
+  - 🤖 **新增模型支持**：新增vllm/vllm-ascend VL 离线推理模型支持！
   - 🔧 **功能增强**：新增流式推理开关、自定义URL路径、API key配置；支持API模型推理warmup；支持自定义多模态数据集性能测评；部分数据集支持服务化PPL（困惑度）测评等多项功能！
   - 🏗️ **基础设施优化**：重构local models和api models组件，统一流式和非流式实现；重构inferencer组件，采用多进程+协程调用方式，提高并发能力；测试结果数据格式优化为jsonl，降低IO压力；采用错误码统一管理错误信息等！
 - **\[2025.11.25\]** 支持服务化模型PPL(Perplexity-based，困惑度)模式精度测评。🔥🔥🔥
