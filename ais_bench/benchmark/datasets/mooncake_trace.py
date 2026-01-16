@@ -7,7 +7,6 @@ from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from tqdm import tqdm
 from datasets import Dataset
 
 from ais_bench.benchmark.registry import LOAD_DATASET
@@ -17,30 +16,30 @@ from ais_bench.benchmark.utils.file.load_tokenizer import load_tokenizer
 from ais_bench.benchmark.openicl.icl_evaluator.icl_base_evaluator import BaseEvaluator
 
 # ============================================================================
-# 1. RNG 管理系统
+# 1. RNG Management System
 # ============================================================================
 
 class RNGManager:
-    """随机数生成器管理器"""
+    """Random number generator manager"""
 
     def __init__(self, root_seed: int | None):
         self._root_seed = root_seed
         if root_seed is not None:
-            # 设置全局随机种子（防御性措施）
+            # Set global random seed (defensive measure)
             random.seed(root_seed)
             np_seed = (root_seed ^ (root_seed >> 32)) & 0xFFFFFFFF
             np.random.seed(np_seed)
 
     def derive(self, identifier: str) -> random.Random:
-        """从标识符派生子 RNG"""
+        """Derive a child RNG from an identifier"""
         if self._root_seed is not None:
-            # 确定性派生：使用 SHA-256 哈希
+            # Deterministic derivation: use SHA-256 hash
             seed_string = f"{self._root_seed}:{identifier}"
             hash_bytes = hashlib.sha256(seed_string.encode("utf-8")).digest()
             child_seed = int.from_bytes(hash_bytes[:8], byteorder="big")
             return random.Random(child_seed)
         else:
-            # 非确定性：使用系统随机数
+            # Non-deterministic: use system random
             return random.Random()
 
 
@@ -48,20 +47,20 @@ _rng_manager: RNGManager | None = None
 
 
 def init_rng(seed: int | None):
-    """初始化全局 RNG 管理器"""
+    """Initialize global RNG manager"""
     global _rng_manager
     _rng_manager = RNGManager(seed)
 
 
 def derive_rng(identifier: str) -> random.Random:
-    """派生子 RNG"""
+    """Derive a child RNG"""
     if _rng_manager is None:
         raise RuntimeError("RNG manager not initialized. Call init_rng() first.")
     return _rng_manager.derive(identifier)
 
 
 # ============================================================================
-# 2. 语料库加载
+# 2. Corpus Loading
 # ============================================================================
 
 DEFAULT_CORPUS_FILE = "assets/shakespeare.txt"
@@ -70,23 +69,24 @@ MAX_CHARS_PER_CHUNK = 10_000
 
 def initialize_corpus(tokenizer, corpus_path: Path) -> list[int]:
     """
-    加载并 tokenize 语料库
+    Load and tokenize corpus
 
-    使用基于字符数的分块策略，确保在不同机器上产生相同的分块边界。
+    Uses a character-based chunking strategy to ensure identical chunk boundaries
+    across different machines.
     """
     with open(corpus_path, encoding="utf-8") as f:
         lines = f.readlines()
 
-    # 预处理：过滤空行
+    # Preprocessing: filter empty lines
     non_empty_lines = [line.strip() for line in lines if line.strip()]
 
     def tokenize_chunk(chunk: list[str]) -> list[int]:
-        """Tokenize 一个文本块"""
+        """Tokenize a text chunk"""
         text = " ".join(chunk)
-        tokens = tokenizer.encode(text, add_special_tokens=False)  # 返回 token ID 列表
+        tokens = tokenizer.encode(text, add_special_tokens=False)  # Returns token ID list
         return tokens
 
-    # 基于字符数的分块（确定性分块）
+    # Character-based chunking (deterministic chunking)
     chunks = []
     buffer = []
     char_count = 0
@@ -100,17 +100,18 @@ def initialize_corpus(tokenizer, corpus_path: Path) -> list[int]:
             buffer = []
             char_count = 0
 
-    # 添加剩余行作为最后一个块
+    # Add remaining lines as the last chunk
     if buffer:
         chunks.append(buffer)
 
-    # 多线程 tokenize（线程数不影响可复现性，因为分块是确定性的）
+    # Multi-threaded tokenization (thread count doesn't affect reproducibility
+    # because chunking is deterministic)
     num_threads = min(os.cpu_count() or 4, 8)
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         tokenized_chunks = list(executor.map(tokenize_chunk, chunks))
 
-    # 展平所有 token
+    # Flatten all tokens
     tokenized_corpus = [
         token for chunk in tokenized_chunks for token in chunk
     ]
@@ -123,20 +124,20 @@ def initialize_corpus(tokenizer, corpus_path: Path) -> list[int]:
 # ============================================================================
 
 class PromptGenerator:
-    """Prompt 生成器"""
+    """Prompt generator"""
 
     def __init__(self, tokenizer, tokenized_corpus: list[int], root_seed: int | None = None, block_size: int = 512):
         self.tokenizer = tokenizer
         self._tokenized_corpus = tokenized_corpus
         self._corpus_size = len(tokenized_corpus)
 
-        # 初始化 RNG（用于语料库采样）
+        # Initialize RNG (for corpus sampling)
         self._corpus_rng = derive_rng("dataset.prompt.corpus")
 
-        # Hash ID 缓存：hash_id -> token 列表
+        # Hash ID cache: hash_id -> token list
         self._cache: dict[int, list[int]] = {}
 
-        # 块大小（默认 512 tokens）
+        # Block size (default 512 tokens)
         self.block_size = block_size
 
     def generate(
@@ -146,61 +147,61 @@ class PromptGenerator:
         hash_ids: list[int] | None = None,
     ) -> str:
         """
-        生成 prompt 的主入口
+        Main entry point for generating prompts
 
         Args:
-            mean: 目标 token 数量（如果使用 hash_ids，这是总 token 数）
-            stddev: 标准差（对于 hash_ids 模式，通常为 0）
-            hash_ids: Hash ID 列表，用于缓存复用
+            mean: Target number of tokens (if using hash_ids, this is the total token count)
+            stddev: Standard deviation (usually 0 for hash_ids mode)
+            hash_ids: Hash ID list for cache reuse
 
         Returns:
-            生成的 prompt 文本
+            Generated prompt text
         """
         if hash_ids:
             return self._generate_cached_prompt(
                 mean, hash_ids, self.block_size
             )
 
-        # 无 hash_ids：使用正态分布采样 token 数量
+        # No hash_ids: sample token count using normal distribution
         num_tokens = self._sample_num_tokens(mean, stddev)
         return self.generate_prompt(num_tokens)
 
     def generate_prompt(self, num_tokens: int) -> str:
-        """生成指定 token 数量的 prompt"""
+        """Generate a prompt with specified number of tokens"""
         tokens = self._sample_tokens(num_tokens)
         return self.tokenizer.decode(tokens, skip_special_tokens=False)
 
     def _sample_tokens(self, num_tokens: int) -> list[int]:
         """
-        从语料库采样指定数量的 tokens
+        Sample specified number of tokens from corpus
 
-        使用循环采样：如果超出语料库末尾，从开头继续。
+        Uses circular sampling: if beyond corpus end, continue from the beginning.
         """
         if num_tokens > self._corpus_size:
-            # 如果请求的 token 数超过语料库大小，返回整个语料库
+            # If requested token count exceeds corpus size, return entire corpus
             return self._tokenized_corpus.copy()
 
-        # 随机选择起始位置
+        # Randomly select starting position
         start_idx = self._corpus_rng.randrange(self._corpus_size)
 
         end_idx = start_idx + num_tokens
         prompt_tokens = self._tokenized_corpus[start_idx:end_idx]
 
-        # 如果超出语料库末尾，从开头继续
+        # If beyond corpus end, continue from the beginning
         if end_idx > self._corpus_size:
             prompt_tokens += self._tokenized_corpus[: end_idx - self._corpus_size]
 
         return prompt_tokens
 
     def _sample_num_tokens(self, mean: int | None, stddev: int | None) -> int:
-        """从正态分布采样 token 数量"""
+        """Sample token count from normal distribution"""
         if mean is None:
             raise ValueError("mean must be provided")
 
         if stddev is None or stddev == 0:
             return mean
 
-        # 使用正态分布采样（确保返回正整数）
+        # Sample using normal distribution (ensure positive integer)
         length_rng = derive_rng("dataset.prompt.length")
         while True:
             value = int(length_rng.gauss(mean, stddev))
@@ -214,44 +215,44 @@ class PromptGenerator:
         block_size: int,
     ) -> str:
         """
-        基于 hash_ids 生成 prompt（使用缓存机制）
+        Generate prompt based on hash_ids (using cache mechanism)
 
-        每个 hash_id 对应一个 token 块。如果 hash_id 在缓存中，复用缓存的 tokens；
-        否则生成新的 tokens 并缓存。
+        Each hash_id corresponds to a token block. If hash_id is in cache,
+        reuse cached tokens; otherwise generate new tokens and cache them.
 
         Args:
-            num_tokens: 总 token 数量
-            hash_ids: Hash ID 列表
-            block_size: 每个 hash 块的 token 数量（默认 512）
+            num_tokens: Total number of tokens
+            hash_ids: Hash ID list
+            block_size: Number of tokens per hash block (default 512)
 
         Returns:
-            生成的 prompt 文本
+            Generated prompt text
         """
         final_prompt: list[int] = []
         current_block_size = block_size
 
-        # 计算最后一个块的大小
+        # Calculate size of the last block
         final_block_size = num_tokens - ((len(hash_ids) - 1) * block_size)
 
-        # 验证参数
+        # Validate parameters
         if final_block_size <= 0 or block_size < final_block_size:
             raise ValueError(
                 f"Input length: {num_tokens}, Hash IDs: {hash_ids}, Block size: {block_size} "
                 f"are not compatible. Final block size: {final_block_size} must be > 0 and <= {block_size}."
             )
 
-        # 处理每个 hash_id
+        # Process each hash_id
         for index, hash_id in enumerate(hash_ids):
-            # 最后一个 hash_id 使用剩余 tokens
+            # Last hash_id uses remaining tokens
             if index == len(hash_ids) - 1:
                 current_block_size = final_block_size
 
-            # 如果 hash_id 不在缓存中，生成并缓存
+            # If hash_id not in cache, generate and cache
             if hash_id not in self._cache:
                 prompt_tokens: list[int] = []
 
-                # 如果 tokenizer 支持块分隔符，插入 BOS/EOS token
-                # 这确保不同块之间不会合并
+                # If tokenizer supports block separator, insert BOS/EOS token
+                # This ensures different blocks won't merge
                 block_separation_token_id = getattr(
                     self.tokenizer, 'block_separation_token_id', None
                 )
@@ -262,40 +263,48 @@ class PromptGenerator:
                 else:
                     prompt_tokens += self._sample_tokens(current_block_size)
 
-                # 缓存 token 列表
+                # Cache token list
                 self._cache[hash_id] = prompt_tokens
 
-            # 复用缓存的 tokens
+            # Reuse cached tokens
             final_prompt.extend(self._cache[hash_id])
 
-        # 解码为文本（不跳过特殊 tokens，保留块分隔符）
+        # Decode to text (don't skip special tokens, preserve block separator)
         return self.tokenizer.decode(final_prompt, skip_special_tokens=False)
 
 
 # ============================================================================
-# 4. Mooncake Trace 数据模型
+# 4. Mooncake Trace Data Model
 # ============================================================================
 
 class MooncakeTrace:
-    """Mooncake trace 数据模型"""
+    """Mooncake trace data model"""
 
     def __init__(self, data: dict[str, Any]):
-        # 验证：input_length 必须存在
-        if "input_length" not in data or data["input_length"] is None:
-            raise ValueError("'input_length' must be provided")
+        # Support input_text field: if input_text exists, input_length and hash_ids become optional
+        self.input_text = data.get("input_text")
 
-        self.input_length = data["input_length"]
+        if self.input_text is None:
+            # If no input_text, input_length must exist
+            if "input_length" not in data or data["input_length"] is None:
+                raise ValueError("Either 'input_text' or 'input_length' must be provided")
+            self.input_length = data["input_length"]
+            self.hash_ids = data.get("hash_ids")
+        else:
+            # If input_text exists, input_length and hash_ids become optional (will be ignored)
+            self.input_length = data.get("input_length")
+            self.hash_ids = data.get("hash_ids")
+
         self.output_length = data.get("output_length")
-        self.hash_ids = data.get("hash_ids")
         self.timestamp = data.get("timestamp")
 
 
 def load_mooncake_trace(filename: str) -> list[MooncakeTrace]:
     """
-    从 JSONL 文件加载 Mooncake trace 数据
+    Load Mooncake trace data from JSONL file
 
     Returns:
-        trace数据列表
+        List of trace data
     """
     traces = []
 
@@ -310,45 +319,141 @@ def load_mooncake_trace(filename: str) -> list[MooncakeTrace]:
     return traces
 
 
+def _process_timestamps(
+    traces: list[MooncakeTrace],
+    auto_offset: bool = False,
+    start_offset: int = 0,
+    end_offset: int = -1,
+) -> list[MooncakeTrace]:
+    """
+    Process timestamps: apply auto offset, start offset, and end offset
+
+    Args:
+        traces: Original trace data list
+        auto_offset: Whether to auto-offset timestamps (make first timestamp 0)
+        start_offset: Start offset in milliseconds, filter out timestamps less than this offset
+        end_offset: End offset in milliseconds, -1 means no limit, >=0 filters out timestamps greater than this offset
+
+    Returns:
+        Processed trace data list
+    """
+    if not traces:
+        return traces
+
+    # Filter traces without timestamps (keep them but they won't participate in timestamp processing)
+    traces_with_timestamp = [(i, trace) for i, trace in enumerate(traces) if trace.timestamp is not None]
+    traces_without_timestamp = [(i, trace) for i, trace in enumerate(traces) if trace.timestamp is None]
+
+    if not traces_with_timestamp:
+        # If no timestamps, return original list directly
+        return traces
+
+    # Extract timestamp list
+    timestamps = [trace.timestamp for _, trace in traces_with_timestamp]
+
+    # 1. Apply auto_offset: make first timestamp 0
+    if auto_offset:
+        min_timestamp = min(timestamps)
+        if min_timestamp > 0:
+            # Subtract minimum from all timestamps
+            for _, trace in traces_with_timestamp:
+                trace.timestamp = trace.timestamp - min_timestamp
+            # Update timestamps list
+            timestamps = [t - min_timestamp for t in timestamps]
+
+    # 2. Apply start_offset and end_offset filtering
+    filtered_indices = []
+    for idx, (original_idx, trace) in enumerate(traces_with_timestamp):
+        timestamp = trace.timestamp
+        # Check if within range
+        if timestamp < start_offset:
+            continue
+        if end_offset >= 0 and timestamp > end_offset:
+            continue
+        filtered_indices.append(original_idx)
+
+    # 3. Build result list: keep filtered traces and traces without timestamps
+    result_traces = []
+    filtered_set = set(filtered_indices)
+    without_timestamp_set = {i for i, _ in traces_without_timestamp}
+    for i, trace in enumerate(traces):
+        if i in filtered_set or i in without_timestamp_set:
+            result_traces.append(trace)
+
+    return result_traces
+
+
 # ============================================================================
 # 5. MooncakeTraceDataset
 # ============================================================================
 
 @LOAD_DATASET.register_module()
 class MooncakeTraceDataset(BaseDataset):
-    def load(self, path, model_path, random_seed=None, generated_prompts_path=""):
+    def load(
+        self,
+        path,
+        model_path,
+        random_seed=None,
+        generated_prompts_path="",
+        fixed_schedule_auto_offset=False,
+        fixed_schedule_start_offset=0,
+        fixed_schedule_end_offset=-1,
+    ):
         """
-        加载 Mooncake trace 数据集
+        Load Mooncake trace dataset
 
         Args:
-            path: 原始包含hashid和trace数据的JSONL文件路径
-            model_path: 模型路径，用于加载tokenizer
-            random_seed: 随机数种子
-            generated_prompts_path: 生成prompt数据的文件路径，如果存在则复用
+            path: Path to JSONL file containing hashid and trace data
+            model_path: Model path for loading tokenizer
+            random_seed: Random seed
+            generated_prompts_path: Path to generated prompt cache file, will be reused if exists
+            fixed_schedule_auto_offset: Whether to auto-offset timestamps (make first timestamp 0), default False
+            fixed_schedule_start_offset: Start offset in milliseconds, default 0
+            fixed_schedule_end_offset: End offset in milliseconds, -1 means no limit, default -1
 
         Returns:
-            Dataset: 包含prompt、timestamp、max_out_len三个字段的数据集
+            Dataset: Dataset containing prompt, timestamp, and max_out_len fields
         """
+        # Parameter validation
+        if fixed_schedule_end_offset >= 0 and fixed_schedule_start_offset > fixed_schedule_end_offset:
+            raise ValueError(
+                f"fixed_schedule_start_offset ({fixed_schedule_start_offset}) must be <= "
+                f"fixed_schedule_end_offset ({fixed_schedule_end_offset})"
+            )
+
         path = get_data_path(path)
         self.logger.info(f"Loading mooncake trace dataset from: {path}")
 
-        # 处理generated_prompts_path
+        # Process generated_prompts_path: consider fixed_schedule parameters to generate unique cache filename
         if not generated_prompts_path:
-            # 生成默认缓存文件路径：在原文件名后加上_generated_prompts
+            # Generate default cache file path: append _generated_prompts to original filename
             dir_name = os.path.dirname(path)
             base_name = os.path.basename(path)
             name_without_ext, ext = os.path.splitext(base_name)
+
+            # If fixed_schedule parameters are used, include them in cache filename
+            cache_suffix = "_generated_prompts"
+            if fixed_schedule_auto_offset or fixed_schedule_start_offset != 0 or fixed_schedule_end_offset != -1:
+                schedule_params = []
+                if fixed_schedule_auto_offset:
+                    schedule_params.append("auto")
+                if fixed_schedule_start_offset != 0:
+                    schedule_params.append(f"start{fixed_schedule_start_offset}")
+                if fixed_schedule_end_offset != -1:
+                    schedule_params.append(f"end{fixed_schedule_end_offset}")
+                cache_suffix += "_" + "_".join(schedule_params)
+
             generated_prompts_path = os.path.join(
-                dir_name, f"{name_without_ext}_generated_prompts{ext}"
+                dir_name, f"{name_without_ext}{cache_suffix}{ext}"
             )
         else:
             generated_prompts_path = get_data_path(generated_prompts_path)
 
         self.logger.info(f"Generated prompts cache path: {generated_prompts_path}")
 
-        # 检查缓存文件是否存在，如果存在则直接加载
+        # Check if cache file exists, if exists load directly
         if os.path.exists(generated_prompts_path):
-            self.logger.info(f"Found existing generated prompts file, loading from: {generated_prompts_path}")
+            self.logger.warning(f"Found existing generated prompts file, loading from: {generated_prompts_path}, if you want to regenerate the prompts, please delete the file and run again.")
             dataset_list = []
             with open(generated_prompts_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -357,19 +462,19 @@ class MooncakeTraceDataset(BaseDataset):
             self.logger.info(f"Successfully loaded {len(dataset_list)} items from cache file")
             return Dataset.from_list(dataset_list)
 
-        # 如果文件不存在，需要生成dataset
+        # If file doesn't exist, need to generate dataset
         self.logger.info(f"Cache file not found, generating prompts from source file")
 
-        # 1. 初始化 RNG 系统
+        # 1. Initialize RNG system
         init_rng(random_seed)
 
-        # 2. 加载 tokenizer
+        # 2. Load tokenizer
         self.logger.info(f"Loading tokenizer from: {model_path}")
         tokenizer = load_tokenizer(model_path)
         self.logger.info(f"Tokenizer loaded successfully, vocab_size: {tokenizer.vocab_size}")
 
-        # 3. 加载并 tokenize 语料库
-        # 尝试从多个可能的位置查找语料库文件
+        # 3. Load and tokenize corpus
+        # Try to find corpus file from multiple possible locations
         corpus_path = None
         possible_paths = [
             Path(__file__).parent / DEFAULT_CORPUS_FILE,
@@ -383,8 +488,8 @@ class MooncakeTraceDataset(BaseDataset):
                 break
 
         if corpus_path is None:
-            # 如果找不到，尝试从aiperf复制或使用绝对路径
-            # 这里我们使用一个fallback：如果找不到文件，创建一个简单的提示
+            # If not found, try to copy from aiperf or use absolute path
+            # Here we use a fallback: if file not found, create a simple message
             raise FileNotFoundError(
                 f"Corpus file not found. Please ensure {DEFAULT_CORPUS_FILE} exists in one of: "
                 f"{[str(p) for p in possible_paths]}"
@@ -394,37 +499,67 @@ class MooncakeTraceDataset(BaseDataset):
         tokenized_corpus = initialize_corpus(tokenizer, corpus_path)
         self.logger.info(f"Corpus loaded successfully, {len(tokenized_corpus)} tokens")
 
-        # 4. 创建 PromptGenerator
+        # 4. Create PromptGenerator
         prompt_generator = PromptGenerator(tokenizer, tokenized_corpus, root_seed=random_seed)
 
-        # 5. 加载 Mooncake trace 数据
+        # 5. Load Mooncake trace data
         trace_data = load_mooncake_trace(path)
         self.logger.info(f"Loaded {len(trace_data)} traces from source file")
 
-        # 6. 转换为 prompts
-        prompts = []
-        for trace in trace_data:
-            # 使用 input_length 生成 prompt
-            prompt = prompt_generator.generate(
-                mean=trace.input_length,
-                stddev=0,  # Mooncake trace 通常不使用标准差
-                hash_ids=trace.hash_ids or [],
+        # 6. Process timestamps (apply fixed_schedule parameters)
+        if fixed_schedule_auto_offset or fixed_schedule_start_offset != 0 or fixed_schedule_end_offset != -1:
+            original_count = len(trace_data)
+            trace_data = _process_timestamps(
+                trace_data,
+                auto_offset=fixed_schedule_auto_offset,
+                start_offset=fixed_schedule_start_offset,
+                end_offset=fixed_schedule_end_offset,
             )
+            self.logger.info(
+                f"Applied timestamp processing: {original_count} -> {len(trace_data)} traces "
+                f"(auto_offset={fixed_schedule_auto_offset}, "
+                f"start_offset={fixed_schedule_start_offset}, "
+                f"end_offset={fixed_schedule_end_offset})"
+            )
+
+        # 7. Convert to prompts
+        prompts = []
+        input_text_count = 0
+        generated_count = 0
+
+        for trace in trace_data:
+            # Check if input_text field exists
+            if trace.input_text is not None:
+                # Directly use input_text as prompt
+                prompt = trace.input_text
+                input_text_count += 1
+            else:
+                # Use PromptGenerator to generate prompt
+                prompt = prompt_generator.generate(
+                    mean=trace.input_length,
+                    stddev=0,  # Mooncake trace usually doesn't use standard deviation
+                    hash_ids=trace.hash_ids or [],
+                )
+                generated_count += 1
 
             item = {
                 "prompt": prompt,
                 "max_out_len": trace.output_length or 0,
                 "answer": "mock_answer",
             }
-            # 如果有timestamp，添加到结果中
+            # If timestamp exists, add to result
             if trace.timestamp is not None:
                 item["timestamp"] = trace.timestamp
             else:
-                item["timestamp"] = 0  # 默认值
+                item["timestamp"] = 0  # Default value
 
             prompts.append(item)
+
+        if input_text_count > 0:
+            self.logger.info(f"Used input_text for {input_text_count} traces, generated prompts for {generated_count} traces")
         self.logger.info(f"Generated {len(prompts)} prompts, saving to cache file: {generated_prompts_path}")
-        # 保存到缓存文件
+        # Save to cache file
+        prompts.sort(key=lambda x: x["timestamp"])
         with open(generated_prompts_path, "w", encoding="utf-8") as f:
             for item in prompts:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
