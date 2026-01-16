@@ -478,7 +478,7 @@ class OpenICLApiInferTask(BaseTask):
         if self.pressure:
             request_num = self.concurrency
         else:
-            request_num = dataset_size
+            request_num = len(global_indexes)
 
         # Create token producer
         token_producer = TokenProducer(
