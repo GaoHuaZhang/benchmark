@@ -6,7 +6,6 @@ from multiprocessing import BoundedSemaphore
 from typing import List, Optional
 
 import aiohttp
-from tqdm import tqdm
 
 from ais_bench.benchmark.models.output import RequestOutput
 from ais_bench.benchmark.registry import ICL_INFERENCERS
@@ -167,11 +166,6 @@ class GenInferencer(BaseApiInferencer, BaseLocalInferencer):
 
         timestamps = retriever.dataset_reader.get_timestamp()
         if timestamps is not None:
-            if self.model_cfg.get('request_rate'):
-                self.logger.warning("Found timestamps in datasets but `request_rate` is configured, ignore timestamps")
-                timestamps = None
-            else:
-                self.logger.info("Found timestamps in datasets, use timestamps for request delay")
-                for index, timestamp in enumerate(timestamps):
-                    data_list[index]["timestamp"] = timestamp / 1000 # ms to s
+            for index, timestamp in enumerate(timestamps):
+                data_list[index]["timestamp"] = timestamp / 1000 # ms to s
         return data_list
