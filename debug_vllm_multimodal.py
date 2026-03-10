@@ -13,8 +13,8 @@ import requests
 
 python debug_vllm_multimodal.py --base-url http://127.0.0.1:8080 --model your-model-name --prompt "..." --images /path/a.png /path/b.jpg --image-format base64
 
-批量 jsonl 推理样例（文本+多图+多音频，图片 base64，音频 url）：
-python debug_vllm_multimodal.py --base-url http://127.0.0.1:8080 --model your-model-name --jsonl-path /path/to/samples.jsonl --base-path /data/root --image-format base64 --audio-format url --output-jsonl /path/to/results.jsonl --verbose
+批量 jsonl 推理样例（文本+多图+多音频，图片 base64，音频为 txt 文件中的 base64 内容）：
+python debug_vllm_multimodal.py --base-url http://127.0.0.1:8080 --model your-model-name --jsonl-path /path/to/samples.jsonl --base-path /data/root --image-format base64 --output-jsonl /path/to/results.jsonl --verbose
 '''
 
 def is_url(path_or_url: str) -> bool:
@@ -75,6 +75,32 @@ def load_media(
     return {"kind": "base64", "value": b64, "mime": mime, "ext": ext or None}
 
 
+def load_audio_from_txt_base64(
+    path_or_b64: str,
+    base_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    从 txt 文件加载 base64 编码的音频内容。
+
+    输入为 .txt 文件路径，文件内容为 base64 编码的音频数据。
+    返回 {"data": "<base64>", "format": "wav"}。
+    """
+    if is_url(path_or_b64):
+        raise ValueError("音频仅支持 txt 文件路径，不支持 URL")
+
+    local_path = resolve_local_path(path_or_b64, base_path)
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(f"音频 txt 文件不存在: {local_path}")
+
+    if not local_path.lower().endswith(".txt"):
+        raise ValueError(f"音频输入须为 .txt 文件路径，当前: {local_path}")
+
+    with open(local_path, "r", encoding="utf-8") as f:
+        b64_content = f.read().strip()
+
+    return {"data": b64_content, "format": "wav"}
+
+
 def build_image_contents(
     images: Iterable[str],
     image_format: str,
@@ -109,42 +135,28 @@ def build_image_contents(
 
 def build_audio_contents(
     audios: Iterable[str],
-    audio_format: str,
     base_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    构造音频 content 块。
+    构造音频 content 块。音频仅支持 txt 文件路径，文件内容为 base64 编码的音频数据。
 
-    这里采用类似 OpenAI \"input_audio\" 的约定：
-    - URL 模式:  {\"type\": \"input_audio\", \"audio_url\": {\"url\": \"...\"}}
-    - base64 模式: {\"type\": \"input_audio\", \"audio\": {\"data\": \"...\", \"format\": \"wav\"}}
-    如需与实际服务端完全对齐，可根据需要调整此处字段。
+    采用类似 OpenAI input_audio 的约定：
+    {"type": "input_audio", "audio": {"data": "<base64>", "format": "wav"}}
     """
     contents: List[Dict[str, Any]] = []
     for audio in audios:
         if not audio:
             continue
-        media = load_media(audio, audio_format, "audio", base_path)
-        if media["kind"] == "url":
-            contents.append(
-                {
-                    "type": "input_audio",
-                    "audio_url": {
-                        "url": media["value"],
-                    },
-                }
-            )
-        else:
-            fmt = media.get("ext") or "wav"
-            contents.append(
-                {
-                    "type": "input_audio",
-                    "audio": {
-                        "data": media["value"],
-                        "format": fmt,
-                    },
-                }
-            )
+        loaded = load_audio_from_txt_base64(audio, base_path)
+        contents.append(
+            {
+                "type": "input_audio",
+                "audio": {
+                    "data": loaded["data"],
+                    "format": loaded["format"],
+                },
+            }
+        )
     return contents
 
 
@@ -153,14 +165,13 @@ def build_message_content(
     images: Iterable[str],
     audios: Iterable[str],
     image_format: str,
-    audio_format: str,
     base_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     content: List[Dict[str, Any]] = []
     if prompt:
         content.append({"type": "text", "text": prompt})
     content.extend(build_image_contents(images, image_format, base_path))
-    content.extend(build_audio_contents(audios, audio_format, base_path))
+    content.extend(build_audio_contents(audios, base_path))
     return content
 
 
@@ -248,7 +259,6 @@ def run_single_sample(
         images=images,
         audios=audios,
         image_format=args.image_format,
-        audio_format=args.audio_format,
         base_path=args.base_path,
     )
     if not content:
@@ -319,7 +329,6 @@ def run_jsonl_batch(
             images=images,
             audios=audios,
             image_format=args.image_format,
-            audio_format=args.audio_format,
             base_path=args.base_path,
         )
         if not content:
@@ -454,7 +463,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=str,
         nargs="*",
         default=None,
-        help="单条请求的音频路径或 URL，可传多个",
+        help="单条请求的音频 txt 文件路径（文件内容为 base64 编码），可传多个",
     )
 
     # 批量 jsonl 模式
@@ -489,13 +498,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         choices=["url", "base64"],
         default="url",
         help="图片在请求中的编码方式：url 或 base64，默认 url",
-    )
-    parser.add_argument(
-        "--audio-format",
-        type=str,
-        choices=["url", "base64"],
-        default="url",
-        help="音频在请求中的编码方式：url 或 base64，默认 url",
     )
     parser.add_argument(
         "--base-path",

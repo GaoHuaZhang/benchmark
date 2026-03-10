@@ -7,7 +7,8 @@
 
 - 单条请求调试：命令行直接指定 `prompt`、`images`、`audios`；
 - 批量推理调试：从 jsonl 文件读取多条样本（按行包含 `prompt`、`images`、`audios` 字段），顺序调用服务并可选保存推理结果；
-- 图片/音频两种编码方式：在请求体中以 **URL** 或 **base64 data URL / base64 数据字段** 的形式携带，便于适配不同服务端实现。
+- 图片编码方式：在请求体中以 **URL** 或 **base64 data URL** 的形式携带；
+- 音频编码方式：仅支持 **txt 文件**，文件内容为 base64 编码的音频数据。
 
 脚本仅依赖标准库与 `requests`，可作为 vLLM 服务联调/排错的轻量级工具，不依赖 AISBench 内部 Runner/Task 体系。
 
@@ -24,8 +25,7 @@
     - 文本块：`{"type": "text", "text": "<prompt 文本>"}`；
     - 图片块（URL 模式）：`{"type": "image_url", "image_url": {"url": "<图片 URL 或本地绝对路径>"}}`；
     - 图片块（base64 模式）：`{"type": "image_url", "image_url": {"url": "data:<mime>;base64,<base64 字符串>"}}`；
-    - 音频块（URL 模式，约定）：`{"type": "input_audio", "audio_url": {"url": "<音频 URL 或本地绝对路径>"}}`；
-    - 音频块（base64 模式，约定）：`{"type": "input_audio", "audio": {"data": "<base64 字符串>", "format": "<wav/mp3 等>"}}`。
+    - 音频块（约定）：`{"type": "input_audio", "audio": {"data": "<base64 字符串>", "format": "wav"}}`，base64 内容来自 txt 文件。
 
 如需与具体服务端实现完全对齐，可在脚本中集中调整上述结构（图片在 `build_image_contents`，音频在 `build_audio_contents`），保持调用入口不变。
 
@@ -50,7 +50,7 @@ python debug_vllm_multimodal.py ...
 - 单条样本模式：
   - `--prompt`: 单条请求的文本 prompt；
   - `--images`: 多个图片路径或 URL，`nargs="*"`，可一次传多张；
-  - `--audios`: 多个音频路径或 URL，`nargs="*"`。
+  - `--audios`: 多个音频 txt 文件路径（文件内容为 base64 编码的音频），`nargs="*"`。
 - 批量 jsonl 模式：
   - `--jsonl-path`: jsonl 文件路径，启用后按行读取样本；
   - `--max-samples`: 最多处理多少条样本，默认读取全部；
@@ -58,7 +58,6 @@ python debug_vllm_multimodal.py ...
   - `--save-raw-response`: 在输出 jsonl 中保留完整原始响应 JSON。
 - 资源编码控制：
   - `--image-format`: `url` 或 `base64`，控制图片在请求体中以 URL 还是 base64 data URL 传输；
-  - `--audio-format`: `url` 或 `base64`，控制音频在请求体中以 URL 还是 base64 数据字段传输；
   - `--base-path`: 当 jsonl 中提供的是相对路径时，用作拼接根目录。
 - 其他：
   - `--sleep-ms`: 批量模式中，两次请求之间的睡眠时间（毫秒），用于限速或观察服务行为；
@@ -72,23 +71,20 @@ python debug_vllm_multimodal.py ...
 批量模式下，jsonl 文件每一行是一个 JSON 对象，推荐结构为：
 
 ```json
-{"prompt": "描述一幅夏日海滩的画面", "images": ["/abs/path/to/img1.png", "/abs/path/to/img2.jpg"], "audios": ["https://example.com/audio1.wav"]}
-{"prompt": "请根据图片内容生成一段故事", "images": ["rel/path/to/img3.png"], "audios": []}
+{"prompt": "描述一幅夏日海滩的画面", "images": ["/abs/path/to/img1.png", "/abs/path/to/img2.jpg"], "audios": ["/abs/path/to/audio1.txt"]}
+{"prompt": "请根据图片内容生成一段故事", "images": ["rel/path/to/img3.png"], "audios": ["rel/path/to/audio2.txt"]}
 ```
 
 字段说明：
 
 - `prompt`：字符串，必填；
 - `images`：字符串列表，可为空或省略，元素为绝对路径、相对路径或 URL；
-- `audios`：字符串列表，可为空或省略，元素为绝对路径、相对路径或 URL。
+- `audios`：字符串列表，可为空或省略，元素为 **txt 文件路径**，txt 文件内容为 base64 编码的音频数据。
 
 脚本行为：
 
-- 对于 URL（以 `http://` 或 `https://` 开头）直接按 URL 发送；
-- 对于本地路径：
-  - 若是相对路径且指定了 `--base-path`，则拼接为 `os.path.join(base_path, path)` 后取绝对路径；
-  - 在 `--image-format base64` / `--audio-format base64` 时，会读取本地文件并转为 base64；
-  - 在 `url` 模式下会直接使用本地绝对路径字符串，由服务端自行解析（如需要可自行扩展为 `file://` URL 或其他映射逻辑）。
+- 图片：对于 URL 直接按 URL 发送；对于本地路径，在 `--image-format base64` 时读取并转为 base64，在 `url` 模式下使用本地绝对路径；
+- 音频：仅支持 txt 文件路径，读取文件内容作为 base64 字符串，构造 `input_audio` 块；若为相对路径且指定了 `--base-path`，则拼接后取绝对路径。
 
 ## 使用示例
 
@@ -112,18 +108,17 @@ python debug_vllm_multimodal.py \
   --image-format base64
 ```
 
-### 单条请求（文本 + 远程音频，音频以 URL 传输）
+### 单条请求（文本 + 音频，音频为 txt 文件中的 base64 内容）
 
 ```bash
 python debug_vllm_multimodal.py \
   --base-url http://127.0.0.1:8080 \
   --model your-model-name \
   --prompt "请根据音频内容做转写" \
-  --audios https://example.com/audio1.wav https://example.com/audio2.wav \
-  --audio-format url
+  --audios /path/to/audio1.txt /path/to/audio2.txt
 ```
 
-### jsonl 批量推理（图片 base64，音频 URL，保存结果）
+### jsonl 批量推理（图片 base64，音频 txt base64，保存结果）
 
 ```bash
 python debug_vllm_multimodal.py \
@@ -132,7 +127,6 @@ python debug_vllm_multimodal.py \
   --jsonl-path /path/to/samples.jsonl \
   --base-path /data/multimodal_root \
   --image-format base64 \
-  --audio-format url \
   --output-jsonl /path/to/results.jsonl \
   --verbose
 ```
@@ -140,7 +134,7 @@ python debug_vllm_multimodal.py \
 ## 异常处理与调试建议
 
 - **参数错误**：未指定 `--base-url` / `--model`，或同时指定 `--jsonl-path` 及单样本参数时，脚本会在启动时直接报错并退出；
-- **文件不存在**：当图片/音频为本地路径但文件不存在时，会抛出 `FileNotFoundError` 并打印错误信息；在批量模式下可结合 `--fail-on-error` 控制是否立即退出；
+- **文件不存在**：当图片为本地路径或音频 txt 文件不存在时，会抛出 `FileNotFoundError` 并打印错误信息；在批量模式下可结合 `--fail-on-error` 控制是否立即退出；
 - **JSON 解析错误**：jsonl 中某一行不是合法 JSON 时，该行会被跳过并打印警告，不影响其他行；
 - **服务端错误**：当 HTTP 状态码非 2xx 时，会打印状态码和响应体前 500 字符，便于排查服务端问题；
 - **响应格式异常**：当响应中不存在 `choices[0].message.content` 时，脚本会打印整段 JSON 响应，便于调整服务端字段映射；
