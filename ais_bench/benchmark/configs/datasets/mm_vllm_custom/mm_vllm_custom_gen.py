@@ -18,7 +18,7 @@ mm_vllm_custom_infer_cfg = dict(
             round=[
                 dict(role="HUMAN", prompt_mm={
                     "text": {"type": "text", "text": "{question}"},
-                    "image": {"type": "image_url", "image_url": {"url": "{image}"}},
+                    "image": {"type": "image_url", "image_url": {"url": "file://{image}"}},
                     "audio": {"type": "audio_url", "audio_url": {"url": "{audio}"}},
                 })
             ]
@@ -36,7 +36,7 @@ mm_vllm_custom_datasets = [
     dict(
         abbr='mm_vllm_custom',
         type=MMVllmCustomDataset,
-        path='/home/zhanggaohua/code/dev/benchmark/ais_bench/datasets/mm_vllm_custom/mm_vllm_custom.jsonl',
+        path='',
         mm_type='path',
         base_path=None,
         reader_cfg=mm_vllm_custom_reader_cfg,

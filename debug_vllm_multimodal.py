@@ -116,7 +116,7 @@ def build_image_contents(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": media["value"],
+                        "url": "file://" + media["value"],
                     },
                 }
             )
