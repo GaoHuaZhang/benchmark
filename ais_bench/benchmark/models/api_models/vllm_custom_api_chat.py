@@ -18,6 +18,32 @@ ROLE_MAP = {
 }
 
 
+def _normalize_multimodal_content(content):
+    """Convert content list for vLLM: audio_url with data URL -> input_audio."""
+    if not isinstance(content, list):
+        return content
+    out = []
+    for block in content:
+        if not isinstance(block, dict):
+            out.append(block)
+            continue
+        if block.get("type") == "audio_url":
+            url = block.get("audio_url") or {}
+            if isinstance(url, dict):
+                url = url.get("url", "")
+            if isinstance(url, str) and url.startswith("data:audio/wav;base64,"):
+                b64 = url.split(",", 1)[1]
+                out.append({
+                    "type": "audio_url",
+                    "audio_url": {"url": f"data:audio/wav;base64,{b64}"},
+                })
+            else:
+                out.append(block)
+        else:
+            out.append(block)
+    return out
+
+
 @MODELS.register_module()
 class VLLMCustomAPIChat(BaseAPIModel):
     """Model wrapper around OpenAI's models. vllm 0.6 +
@@ -108,7 +134,10 @@ class VLLMCustomAPIChat(BaseAPIModel):
         else:
             messages = []
             for item in input:
-                msg = {"content": item["prompt"]}
+                raw_content = item["prompt"]
+                if isinstance(raw_content, list):
+                    raw_content = _normalize_multimodal_content(raw_content)
+                msg = {"content": raw_content}
                 # Use hash table (dict) driven approach for role mapping
                 role = item.get("role", "")
                 msg["role"] = ROLE_MAP.get(role, role)  # Use original role if not in map

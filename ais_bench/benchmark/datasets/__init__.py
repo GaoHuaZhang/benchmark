@@ -41,6 +41,7 @@ from ais_bench.benchmark.datasets.infovqa import *
 from ais_bench.benchmark.datasets.docvqa import *
 from ais_bench.benchmark.datasets.omnidocbench.omnidocbench import *
 from ais_bench.benchmark.datasets.mm_custom import *
+from ais_bench.benchmark.datasets.mm_vllm_custom import *
 from ais_bench.benchmark.datasets.mmmu import *
 from ais_bench.benchmark.datasets.mmmu_pro import *
 from ais_bench.benchmark.datasets.csl import * # noqa: F401, F403
