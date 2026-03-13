@@ -34,8 +34,8 @@ def _normalize_multimodal_content(content):
             if isinstance(url, str) and url.startswith("data:audio/wav;base64,"):
                 b64 = url.split(",", 1)[1]
                 out.append({
-                    "type": "audio_url",
-                    "audio_url": {"url": f"data:audio/wav;base64,{b64}"},
+                    "type": "audio_embeds",
+                    "audio_embeds": b64,
                 })
             else:
                 out.append(block)
